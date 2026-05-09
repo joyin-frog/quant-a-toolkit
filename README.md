@@ -44,6 +44,16 @@ print(result["metrics"])
 - `orders/latest_orders.csv`：最新交易清单
 - `reports/`：净值、回撤、持仓图
 
+## Web 页面
+
+安装完依赖后可启动最小 Streamlit 面板：
+
+```bash
+PYTHONPATH=src .venv/bin/streamlit run streamlit_app.py
+```
+
+页面支持切换回测引擎，并调整动量窗口、持仓数和初始资金；现有 CLI 用法保持不变。
+
 ## 因子分析
 
 `run_pipeline()` 会返回 `factor_analysis`。当股票池太小或分层不足时，Alphalens 会跳过分析，并把原因写进 `factor_analysis["warnings"]`。

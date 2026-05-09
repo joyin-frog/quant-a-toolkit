@@ -9,8 +9,9 @@ def rebalance_dates(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 
 # 这里把策略真实使用的信号拆出来，方便回测、因子分析、后续 notebook 研究共用同一套定义。
-def compute_strategy_signals(close_matrix: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    momentum = close_matrix / close_matrix.shift(MOMENTUM_WINDOW) - 1
+def compute_strategy_signals(close_matrix: pd.DataFrame, momentum_window: int | None = None) -> dict[str, pd.DataFrame]:
+    selected_momentum_window = momentum_window or MOMENTUM_WINDOW
+    momentum = close_matrix / close_matrix.shift(selected_momentum_window) - 1
     moving_average = close_matrix.rolling(MA_WINDOW).mean()
     eligible = close_matrix.gt(moving_average)
     factor_score = momentum.where(eligible)
@@ -23,8 +24,13 @@ def compute_strategy_signals(close_matrix: pd.DataFrame) -> dict[str, pd.DataFra
 
 
 # 这里输出的是“目标权重矩阵”，而不是成交结果；未来替换信号模型或仓位控制时，优先改这个函数。
-def build_target_weights(close_matrix: pd.DataFrame) -> pd.DataFrame:
-    signals = compute_strategy_signals(close_matrix)
+def build_target_weights(
+    close_matrix: pd.DataFrame,
+    momentum_window: int | None = None,
+    max_holdings: int | None = None,
+) -> pd.DataFrame:
+    selected_max_holdings = max_holdings or MAX_HOLDINGS
+    signals = compute_strategy_signals(close_matrix, momentum_window=momentum_window)
     factor_score = signals["factor_score"]
 
     targets = pd.DataFrame(0.0, index=close_matrix.index, columns=close_matrix.columns)
@@ -37,7 +43,7 @@ def build_target_weights(close_matrix: pd.DataFrame) -> pd.DataFrame:
 
         # 先用均线过滤掉不在趋势上的标的，再按动量排序，避免纯动量把弱趋势资产也排进来。
         ranked = factor_score.loc[current_date].dropna().sort_values(ascending=False)
-        selected = ranked.head(MAX_HOLDINGS).index.tolist()
+        selected = ranked.head(selected_max_holdings).index.tolist()
 
         current = pd.Series(0.0, index=close_matrix.columns)
         for symbol in selected:

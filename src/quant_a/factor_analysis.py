@@ -7,6 +7,9 @@ FORWARD_PERIODS = (1, 5, 10, 20)
 DEFAULT_QUANTILES = 5
 
 
+FREQUENCY_WARNING_FRAGMENT = "does not conform to passed frequency C"
+
+
 def _empty_analysis(warnings: list[str] | None = None) -> dict[str, object]:
     return {
         "factor_data": pd.DataFrame(),
@@ -17,15 +20,22 @@ def _empty_analysis(warnings: list[str] | None = None) -> dict[str, object]:
     }
 
 
+def _format_analysis_error(error: Exception) -> str:
+    message = str(error)
+    if FREQUENCY_WARNING_FRAGMENT in message:
+        return "factor analysis skipped: trading-calendar frequency could not be inferred"
+    return f"factor analysis skipped: {message}"
+
+
 # 研究层只关心“因子值 + 未来收益”的整理，不参与回测执行或仓位计算。
-def run_factor_analysis(close_matrix: pd.DataFrame) -> dict[str, object]:
+def run_factor_analysis(close_matrix: pd.DataFrame, momentum_window: int | None = None) -> dict[str, object]:
     try:
         import alphalens.performance as al_performance
         import alphalens.utils as al_utils
     except Exception as error:
         return _empty_analysis([f"factor analysis unavailable: {error}"])
 
-    factor_score = compute_strategy_signals(close_matrix)["factor_score"]
+    factor_score = compute_strategy_signals(close_matrix, momentum_window=momentum_window)["factor_score"]
     analysis_dates = rebalance_dates(close_matrix.index)
     factor_frame = factor_score.loc[analysis_dates]
     factor_series = factor_frame.stack().rename("factor")
@@ -51,7 +61,7 @@ def run_factor_analysis(close_matrix: pd.DataFrame) -> dict[str, object]:
             max_loss=1.0,
         )
     except Exception as error:
-        return _empty_analysis([f"factor analysis skipped: {error}"])
+        return _empty_analysis([_format_analysis_error(error)])
 
     ic = al_performance.factor_information_coefficient(factor_data)
     mean_quantile_returns, _ = al_performance.mean_return_by_quantile(factor_data)

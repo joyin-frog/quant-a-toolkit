@@ -35,7 +35,11 @@ def _build_trades_from_weights(actual_weights: pd.DataFrame) -> pd.DataFrame:
 
 # 这是一个简化的向量化回测器：按日频收益、下一根 bar 执行、固定成本模型来近似真实持仓表现。
 # 如果后续接更多执行引擎，优先保持这里返回 schema 稳定，不动下游指标/订单/报表层。
-def run_vectorized_backtest(close_matrix: pd.DataFrame, target_weights: pd.DataFrame) -> dict[str, pd.DataFrame | pd.Series]:
+def run_vectorized_backtest(
+    close_matrix: pd.DataFrame,
+    target_weights: pd.DataFrame,
+    initial_cash: float | None = None,
+) -> dict[str, pd.DataFrame | pd.Series]:
     returns = close_matrix.pct_change(fill_method=None).fillna(0.0)
     desired_weights = _prepare_target_weights(target_weights)
     actual_weights = desired_weights.shift(1).fillna(0.0)
@@ -71,9 +75,14 @@ def _load_backtrader_feed(symbol: str) -> pd.DataFrame:
 
 
 # backtrader 负责更接近真实成交的执行与资金曲线；目标权重仍然复用 strategy.py 的 pandas 输出。
-def run_backtrader_backtest(close_matrix: pd.DataFrame, target_weights: pd.DataFrame) -> dict[str, pd.DataFrame | pd.Series]:
+def run_backtrader_backtest(
+    close_matrix: pd.DataFrame,
+    target_weights: pd.DataFrame,
+    initial_cash: float | None = None,
+) -> dict[str, pd.DataFrame | pd.Series]:
     import backtrader as bt
 
+    selected_initial_cash = initial_cash if initial_cash is not None else INITIAL_CASH
     desired_weights = _prepare_target_weights(target_weights)
     rebalance_flags = desired_weights.diff().abs().sum(axis=1).fillna(desired_weights.abs().sum(axis=1)) > 1e-8
 
@@ -93,7 +102,7 @@ def run_backtrader_backtest(close_matrix: pd.DataFrame, target_weights: pd.DataF
             self.last_seen_date = current_date
 
             portfolio_value = float(self.broker.getvalue())
-            row = {"date": current_date, "equity": portfolio_value / INITIAL_CASH}
+            row = {"date": current_date, "equity": portfolio_value / selected_initial_cash}
             for data in self.datas:
                 symbol = data._name
                 position = self.getposition(data)
@@ -116,7 +125,7 @@ def run_backtrader_backtest(close_matrix: pd.DataFrame, target_weights: pd.DataF
                 self.order_target_percent(data=data, target=float(target_row.get(symbol, 0.0)))
 
     cerebro = bt.Cerebro(stdstats=False)
-    cerebro.broker.setcash(INITIAL_CASH)
+    cerebro.broker.setcash(selected_initial_cash)
     cerebro.broker.setcommission(commission=COMMISSION)
     cerebro.broker.set_slippage_perc(perc=SLIPPAGE)
     cerebro.addstrategy(TargetWeightsStrategy, target_weights=desired_weights, rebalance_flags=rebalance_flags)
@@ -161,9 +170,10 @@ def run_backtest(
     close_matrix: pd.DataFrame,
     target_weights: pd.DataFrame,
     engine: str = "vectorized",
+    initial_cash: float | None = None,
 ) -> dict[str, pd.DataFrame | pd.Series]:
     if engine not in SUPPORTED_ENGINES:
         raise ValueError(f"Unsupported backtest engine: {engine}")
     if engine == "backtrader":
-        return run_backtrader_backtest(close_matrix, target_weights)
-    return run_vectorized_backtest(close_matrix, target_weights)
+        return run_backtrader_backtest(close_matrix, target_weights, initial_cash=initial_cash)
+    return run_vectorized_backtest(close_matrix, target_weights, initial_cash=initial_cash)

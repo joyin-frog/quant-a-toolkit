@@ -32,14 +32,36 @@ def refresh_data(universe: dict[str, str]) -> tuple[list[Path], list[str]]:
 
 # 这是整条研究流水线的总控入口：抓数/读缓存/生成权重/回测/指标/订单/图表都在这里串起来。
 # 返回值是下游 CLI、Notebook 或未来接 Web 界面时可以复用的统一结果契约。
-def run_pipeline(current_holdings: dict[str, float] | None = None, engine: str | None = None) -> dict[str, object]:
+def run_pipeline(
+    current_holdings: dict[str, float] | None = None,
+    engine: str | None = None,
+    momentum_window: int | None = None,
+    max_holdings: int | None = None,
+    initial_cash: float | None = None,
+) -> dict[str, object]:
     selected_engine = engine or BACKTEST_ENGINE
+    if momentum_window is not None and momentum_window < 1:
+        raise ValueError("momentum_window must be at least 1")
+    if max_holdings is not None and not 1 <= max_holdings <= len(SYMBOLS):
+        raise ValueError(f"max_holdings must be between 1 and {len(SYMBOLS)}")
+    if initial_cash is not None and initial_cash <= 0:
+        raise ValueError("initial_cash must be greater than 0")
+
     ORDERS_DIR.mkdir(parents=True, exist_ok=True)
     _, warnings = refresh_data(UNIVERSE)
     close_matrix = load_aligned_closes(SYMBOLS)
-    factor_analysis = run_factor_analysis(close_matrix)
-    target_weights = build_target_weights(close_matrix)
-    backtest_result = run_backtest(close_matrix, target_weights, engine=selected_engine)
+    factor_analysis = run_factor_analysis(close_matrix, momentum_window=momentum_window)
+    target_weights = build_target_weights(
+        close_matrix,
+        momentum_window=momentum_window,
+        max_holdings=max_holdings,
+    )
+    backtest_result = run_backtest(
+        close_matrix,
+        target_weights,
+        engine=selected_engine,
+        initial_cash=initial_cash,
+    )
     metrics = calculate_metrics(backtest_result["returns"], backtest_result["equity_curve"])
     order_table = generate_order_table(backtest_result["target_weights"], current_holdings=current_holdings)
     order_path = save_order_table(order_table)

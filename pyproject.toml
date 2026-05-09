@@ -16,6 +16,7 @@ dependencies = [
   "matplotlib>=3.9.0",
   "numpy>=1.26.0",
   "pandas>=2.2.0",
+  "streamlit>=1.45.0",
 ]
 
 [tool.setuptools.packages.find]
