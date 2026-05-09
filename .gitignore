@@ -1,0 +1,10 @@
+.DS_Store
+.venv/
+.claude/
+__pycache__/
+*.pyc
+src/*.egg-info/
+src/quant_a.egg-info/
+data/
+orders/
+reports/

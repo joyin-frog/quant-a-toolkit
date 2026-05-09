@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-a"
+version = "0.1.0"
+description = "Minimal A-share ETF rotation scaffold"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "akshare>=1.16.0",
+  "alphalens-reloaded>=0.4.6",
+  "backtrader>=1.9.78.123",
+  "empyrical-reloaded>=0.5.12",
+  "matplotlib>=3.9.0",
+  "numpy>=1.26.0",
+  "pandas>=2.2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
