@@ -115,6 +115,27 @@ def _capital() -> float:
     return float(dep - wd)
 
 
+def eligible_core_curve(ctx: dict[str, object], window: pd.DatetimeIndex) -> pd.Series:
+    """统一基准：窗口起点合格的核心股，等权【买入持有】到末，日度净值（基1）。
+
+    review 归因 与 portfolio_web report 共用同一个基准，保证两边"超额"口径一致
+    （之前 report 用全程曲线截窗口、短窗口下不稳，会和归因打架）。
+    """
+    close = ctx["close"]
+    core_cols = [c for c in close.columns if c in ctx["core_universe"]]
+    win = [d for d in window if d in close.index]
+    if not win:
+        return pd.Series(1.0, index=window)
+    start = win[0]
+    elig0 = ctx["candidate"].loc[start, core_cols]
+    names0 = elig0[elig0].index
+    if not len(names0):
+        return pd.Series(1.0, index=window)
+    sub = close.loc[win, names0].ffill()
+    nav = (sub / sub.iloc[0]).mean(axis=1)
+    return nav.reindex(window).ffill().bfill()
+
+
 # ======================================================================
 # 1) 归因
 # ======================================================================
@@ -142,11 +163,8 @@ def attribution(ctx: dict[str, object] | None = None) -> dict[str, object]:
     top1 = float(top["pnl"].iloc[0] / gains) if gains > 0 else 0.0
     top3 = float(top["pnl"].head(3).sum() / gains) if gains > 0 else 0.0
 
-    # 基准：起始日合格的核心股,等权买入持有到现在(同窗口、不选股)
-    core_cols = [c for c in close.columns if c in ctx["core_universe"]]
-    elig0 = ctx["candidate"].loc[start, core_cols]
-    names0 = elig0[elig0].index
-    bench_ret = float((close.loc[now, names0] / close.loc[start, names0] - 1).mean()) if len(names0) else 0.0
+    # 基准：统一口径（与 portfolio_web report 共用 eligible_core_curve）。
+    bench_ret = float(eligible_core_curve(ctx, close.loc[start:now].index).iloc[-1] - 1.0)
 
     return {
         "empty": False, "since": start.strftime("%Y-%m-%d"), "as_of": now.strftime("%Y-%m-%d"),

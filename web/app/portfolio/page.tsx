@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeftIcon, GaugeIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { ArrowLeftIcon, ClipboardCheckIcon, GaugeIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
@@ -85,11 +85,47 @@ type Report = {
   curve?: { date: string; real: number; strategy?: number | null; benchmark?: number | null }[];
 };
 
+type Review = {
+  attribution: {
+    empty: boolean;
+    since?: string;
+    as_of?: string;
+    total_return?: number;
+    benchmark_return?: number;
+    excess?: number;
+    by_sleeve?: Record<string, number>;
+    top1_share_of_gains?: number;
+    top3_share_of_gains?: number;
+    holdings?: { code: string; name: string; sleeve: string; contrib: number; ret: number; pnl: number }[];
+  };
+  execution: {
+    empty: boolean;
+    rebalance_date?: string;
+    grade?: string;
+    coverage?: number;
+    avg_slippage?: number;
+    off_cycle_trades?: number;
+    recommended?: number;
+    bought?: number;
+    matched?: number;
+    missing?: string[];
+    extra?: string[];
+  };
+  factor_health: {
+    empty: boolean;
+    recent_months?: number;
+    factors?: { factor: string; ic_full: number; ic_recent: number | null; decay: number | null; ic_ir: number; n: number }[];
+  };
+};
+
 const pct = (x?: number | null) =>
   x === null || x === undefined ? "—" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
+const pct0 = (x?: number | null) => (x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`);
 const yuan = (x?: number) => (x === undefined ? "—" : `¥${Math.round(x).toLocaleString("zh-CN")}`);
 const tone = (x?: number | null) =>
   x === null || x === undefined || x === 0 ? "text-foreground" : x > 0 ? "text-gain" : "text-loss";
+const gradeTone = (g?: string) =>
+  g === "A" ? "text-gain" : g === "B" ? "text-primary" : g === "D" ? "text-loss" : "text-muted-foreground";
 const today = () => new Date().toISOString().slice(0, 10);
 
 const chartConfig = {
@@ -129,6 +165,8 @@ export default function PortfolioPage() {
   const [reporting, setReporting] = useState(false);
   const [holdings, setHoldings] = useState<Holdings | null>(null);
   const [hLoading, setHLoading] = useState(false);
+  const [review, setReview] = useState<Review | null>(null);
+  const [reviewing, setReviewing] = useState(false);
 
   const loadTrades = useCallback(async () => {
     const res = await fetch("/api/trades");
@@ -209,6 +247,26 @@ export default function PortfolioPage() {
       setReporting(false);
     }
   }
+
+  async function loadReview() {
+    setReviewing(true);
+    const t = toast.loading("生成复盘中…（约 20-40 秒）");
+    try {
+      const res = await fetch("/api/review");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "失败");
+      setReview(json);
+      toast.success("复盘已生成", { id: t });
+    } catch (e) {
+      toast.error((e as Error).message, { id: t });
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  const exec = review?.execution;
+  const attr = review?.attribution;
+  const fh = review?.factor_health;
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
@@ -390,8 +448,9 @@ export default function PortfolioPage() {
                       </span>
                     </span>
                   </div>
+                  <div className="max-h-[22rem] overflow-y-auto">
                   <Table>
-                    <TableHeader>
+                    <TableHeader className="bg-card sticky top-0 z-10">
                       <TableRow>
                         <TableHead>名称</TableHead>
                         <TableHead className="text-right">成本</TableHead>
@@ -421,6 +480,7 @@ export default function PortfolioPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  </div>
                 </div>
               ) : (
                 <p className="text-muted-foreground py-6 text-center text-sm">还没有持仓（先记成交）</p>
@@ -509,13 +569,183 @@ export default function PortfolioPage() {
           </Card>
 
           <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <div className="flex flex-col gap-1.5">
+                <CardTitle>执行评分卡</CardTitle>
+                <CardDescription>
+                  {exec && !exec.empty
+                    ? `调仓日 ${exec.rebalance_date} · 推荐清单 vs 真实成交 · 打过程分`
+                    : "对照「该买什么 vs 你真实成交」给操作打分"}
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={loadReview} disabled={reviewing}>
+                {reviewing ? <Spinner data-icon="inline-start" /> : <ClipboardCheckIcon data-icon="inline-start" />}
+                生成复盘
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {exec && !exec.empty ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-5">
+                    <div
+                      className={cn(
+                        "bg-muted flex size-16 shrink-0 items-center justify-center rounded-xl text-4xl font-bold tabular-nums",
+                        gradeTone(exec.grade),
+                      )}
+                    >
+                      {exec.grade}
+                    </div>
+                    <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1.5 text-sm">
+                      <span className="text-muted-foreground">
+                        覆盖率{" "}
+                        <span className="text-foreground font-semibold tabular-nums">{pct0(exec.coverage)}</span>
+                        <span className="ml-1 text-xs">（{exec.matched}/{exec.recommended} 只）</span>
+                      </span>
+                      <span className="text-muted-foreground">
+                        平均滑点{" "}
+                        <span className={cn("font-semibold tabular-nums", tone(exec.avg_slippage))}>
+                          {pct(exec.avg_slippage)}
+                        </span>
+                      </span>
+                      <span className="text-muted-foreground">
+                        非调仓日乱动{" "}
+                        <span className="text-foreground font-semibold tabular-nums">{exec.off_cycle_trades}</span> 笔
+                      </span>
+                    </div>
+                  </div>
+                  {exec.missing && exec.missing.length > 0 ? (
+                    <p className="text-muted-foreground text-sm">漏买：{exec.missing.join("、")}</p>
+                  ) : null}
+                  {exec.extra && exec.extra.length > 0 ? (
+                    <p className="text-muted-foreground text-sm">计划外买入：{exec.extra.join("、")}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-muted-foreground py-6 text-center text-sm">点&quot;生成复盘&quot;给这一期操作打分</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {attr && !attr.empty ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>收益归因</CardTitle>
+                <CardDescription>
+                  {attr.since} ~ {attr.as_of} · 这段收益从哪来
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <Metric label="实盘" value={pct(attr.total_return)} valueClass={tone(attr.total_return)} />
+                  <Metric
+                    label="基准(核心池等权)"
+                    value={pct(attr.benchmark_return)}
+                    valueClass={tone(attr.benchmark_return)}
+                  />
+                  <Metric label="超额(选股能力)" value={pct(attr.excess)} valueClass={tone(attr.excess)} />
+                </div>
+                <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-6 gap-y-1.5 text-sm">
+                  {Object.entries(attr.by_sleeve ?? {}).map(([k, v]) => (
+                    <span key={k}>
+                      {k} <span className={cn("font-semibold tabular-nums", tone(v))}>{pct(v)}</span>
+                    </span>
+                  ))}
+                  <span>
+                    集中度 前1{" "}
+                    <span className="text-foreground font-semibold tabular-nums">{pct0(attr.top1_share_of_gains)}</span> / 前3{" "}
+                    <span className="text-foreground font-semibold tabular-nums">{pct0(attr.top3_share_of_gains)}</span> 盈利
+                  </span>
+                </div>
+                <div className="max-h-[22rem] overflow-y-auto">
+                  <Table>
+                    <TableHeader className="bg-card sticky top-0 z-10">
+                      <TableRow>
+                        <TableHead>名称</TableHead>
+                        <TableHead>腿</TableHead>
+                        <TableHead className="text-right">贡献</TableHead>
+                        <TableHead className="text-right">自身</TableHead>
+                        <TableHead className="text-right">盈亏</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {attr.holdings?.map((h) => (
+                        <TableRow key={h.code}>
+                          <TableCell className="font-medium">{h.name}</TableCell>
+                          <TableCell>
+                            <Badge variant={h.sleeve === "核心" ? "secondary" : "default"}>{h.sleeve}</Badge>
+                          </TableCell>
+                          <TableCell className={cn("text-right tabular-nums", tone(h.contrib))}>{pct(h.contrib)}</TableCell>
+                          <TableCell className={cn("text-right tabular-nums", tone(h.ret))}>{pct(h.ret)}</TableCell>
+                          <TableCell className={cn("text-right tabular-nums", tone(h.pnl))}>{yuan(h.pnl)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {fh && !fh.empty ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>因子体检</CardTitle>
+                <CardDescription>
+                  滚动 rank-IC：全程 vs 近 {fh.recent_months ?? 12} 月 · 季度看，持续衰减才调权重
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="max-h-[22rem] overflow-y-auto">
+                  <Table>
+                    <TableHeader className="bg-card sticky top-0 z-10">
+                      <TableRow>
+                        <TableHead>因子</TableHead>
+                        <TableHead className="text-right">全程IC</TableHead>
+                        <TableHead className="text-right">近一年</TableHead>
+                        <TableHead className="text-right">衰减</TableHead>
+                        <TableHead className="text-right">IC_IR</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {fh.factors?.map((f) => (
+                        <TableRow key={f.factor}>
+                          <TableCell className="font-medium">
+                            {f.factor}
+                            {f.decay !== null && f.decay !== undefined && f.decay < -0.02 ? (
+                              <Badge variant="outline" className="text-loss ml-2">
+                                衰减
+                              </Badge>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{f.ic_full?.toFixed(3)}</TableCell>
+                          <TableCell className={cn("text-right tabular-nums", tone(f.ic_recent))}>
+                            {f.ic_recent === null || f.ic_recent === undefined ? "—" : f.ic_recent.toFixed(3)}
+                          </TableCell>
+                          <TableCell className={cn("text-right tabular-nums", tone(f.decay))}>
+                            {f.decay === null || f.decay === undefined ? "—" : f.decay.toFixed(3)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{f.ic_ir?.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="text-muted-foreground mt-3 text-xs">
+                  IC&gt;0 且稳(IC_IR 高)=因子有效；近一年比全程明显掉(衰减&lt;-0.02)=钝化，可考虑降权（别因一两月就动）。
+                </p>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card>
             <CardHeader>
               <CardTitle>成交流水（{trades.length}）</CardTitle>
             </CardHeader>
             <CardContent>
               {trades.length ? (
+                <div className="max-h-[24rem] overflow-y-auto">
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="bg-card sticky top-0 z-10">
                     <TableRow>
                       <TableHead>日期</TableHead>
                       <TableHead>方向</TableHead>
@@ -542,6 +772,7 @@ export default function PortfolioPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               ) : (
                 <p className="text-muted-foreground py-6 text-center text-sm">还没有成交记录</p>
               )}

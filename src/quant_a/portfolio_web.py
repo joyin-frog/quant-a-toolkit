@@ -139,12 +139,12 @@ def _report() -> dict[str, object]:
     # 对比：把策略回测 + 基准对齐到实盘同一窗口、各自基1，算跟踪误差和损耗。
     try:
         from quant_a.cs_pipeline import run_cs_pipeline
+        from quant_a.review import _load_context, eligible_core_curve
 
         res = run_cs_pipeline()
         strat = res["equity_curve"].reindex(window).ffill().bfill()
-        bench = res["benchmark_curve"].reindex(window).ffill().bfill()
         strat_nav = strat / float(strat.iloc[0])
-        bench_nav = bench / float(bench.iloc[0])
+        bench_nav = eligible_core_curve(_load_context(), window)  # 与 review 归因同一基准(起点合格核心股等权持有)
         strat_ret = strat_nav.pct_change(fill_method=None).fillna(0.0)
         out["tracking_error"] = _num((real_ret - strat_ret).std() * np.sqrt(252))
         out["drag_vs_backtest"] = _num(nav.iloc[-1] - strat_nav.iloc[-1])
@@ -168,10 +168,14 @@ def _report() -> dict[str, object]:
 
 
 def _review(rebalance_date: str | None = None) -> dict[str, object]:
-    from quant_a.review import _load_context, attribution, execution_scorecard
+    from quant_a.review import _load_context, attribution, execution_scorecard, factor_health
 
     ctx = _load_context()
-    return {"attribution": attribution(ctx), "execution": execution_scorecard(rebalance_date, ctx)}
+    return {
+        "attribution": attribution(ctx),
+        "execution": execution_scorecard(rebalance_date, ctx),
+        "factor_health": factor_health(ctx),
+    }
 
 
 def _factor_health() -> dict[str, object]:
