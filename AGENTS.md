@@ -19,7 +19,6 @@ python3 -m venv .venv
 ```bash
 PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline [--mainboard] [--walkforward]  # 主力：中证1000主板5因子
 PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline      # 核心-卫星（沪深300核心 + AI卫星）
-PYTHONPATH=src .venv/bin/python -m quant_a.gc_pipeline      # 金叉择时（对照，非主力）
 PYTHONPATH=src .venv/bin/python main.py                     # 旧沪深300周频轮动（入口）
 ```
 

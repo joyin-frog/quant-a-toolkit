@@ -51,15 +51,7 @@ PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline
 
 输出 `orders/cs_holdings.csv` + `reports/cs_equity.png`。
 
-### 3) 金叉择时（对照，非主力）
-
-5/20 日均线金叉事件驱动；真实成交下无优势，仅作对照。
-
-```bash
-PYTHONPATH=src .venv/bin/python -m quant_a.gc_pipeline
-```
-
-### 4) 旧沪深300周频轮动（历史入口）
+### 3) 旧沪深300周频轮动（历史入口）
 
 ```bash
 PYTHONPATH=src .venv/bin/python main.py

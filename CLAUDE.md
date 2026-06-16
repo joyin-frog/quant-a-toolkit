@@ -101,12 +101,12 @@ cd web && npm run dev    # → http://localhost:3000
 - 关键指标：实盘总收益、对基准超额、**对回测损耗（执行滑点/纪律）**、跟踪误差——实盘最该盯后两个。
 - ⚠️ 只记真实成交（不是推荐清单）；跑前数据要刷新到成交覆盖的日期。
 
-> 另有并行的研究/对照入口：`quant_a.factor_pipeline`（中证1000主板4因子，主力）、`quant_a.main`（旧沪深300周频轮动）、`quant_a.gc_pipeline`（5/20金叉择时，真实成交下无优势，仅对照）。
+> 另有并行的研究/对照入口：`quant_a.factor_pipeline`（中证1000主板4因子，主力）、`quant_a.main`（旧沪深300周频轮动）。
 
 ## 架构
 
 核心逻辑都在 `src/quant_a`。最初是最小化的沪深300 / ETF 轮动脚手架（`main.py` 入口），现已长出多套并行策略
-（主力多因子 `factor_pipeline`、核心卫星 `cs_pipeline`、金叉对照 `gc_pipeline`）+ 网页前端（`web/`）+ SQLite
+（主力多因子 `factor_pipeline`、核心卫星 `cs_pipeline`）+ 网页前端（`web/`）+ SQLite
 实盘记账（`portfolio_db` / `portfolio_web`）。下面的“主流程”特指旧的 `main.py` 轮动入口：
 
 主流程在 `src/quant_a/main.py`：
@@ -135,7 +135,6 @@ cd web && npm run dev    # → http://localhost:3000
   - `factor_backtest.py`：固定本金 + 100股整手的真实回测 + 下单清单生成
   - `factor_pipeline.py`：主力策略总控入口（回测/指标/基准对比/下单清单/报告图）
   - `trade_rules.py`：合格股票过滤（流动性/ST/停牌/上市天数）
-- 金叉择时（对照，非主力）：`signals.py`（金叉信号）、`event_backtest.py`（事件驱动回测）、`gc_pipeline.py`（入口）
 - **核心-卫星 + 网页 + 实盘记账**：
   - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测
   - `cs_pipeline.py` / `cs_web.py`：核心卫星总控 / 网页用 JSON 入口
@@ -150,7 +149,7 @@ cd web && npm run dev    # → http://localhost:3000
 - live 抓数失败但本地有缓存时，会继续使用缓存；只有“无缓存且抓数失败”才报错
 - 当前因子分析基于策略真实使用的打分：`momentum.where(eligible)`
 - 输出目录固定为：`data/`、`orders/`、`reports/`
-- 现在有多套并行策略（主力 `factor_pipeline`、核心卫星 `cs_pipeline`、金叉对照 `gc_pipeline`、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
+- 现在有多套并行策略（主力 `factor_pipeline`、核心卫星 `cs_pipeline`、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
 
 ## 当前限制
 
