@@ -123,6 +123,8 @@ def run_cs_pipeline(capital: float | None = None, core_holdings: int | None = No
     ORDERS_DIR.mkdir(parents=True, exist_ok=True)
     order_path = ORDERS_DIR / "cs_holdings.csv"
     buy_list.to_csv(order_path, index=False)
+    snap_dir = ORDERS_DIR / "snapshots"; snap_dir.mkdir(parents=True, exist_ok=True)
+    buy_list.to_csv(snap_dir / f"{latest:%Y-%m-%d}_cs.csv", index=False)  # 留档：事后给执行打分要对照"当时该买什么"
     chart = _save_equity_chart(backtest["equity_curve"], bench_curve)
 
     from collections import Counter

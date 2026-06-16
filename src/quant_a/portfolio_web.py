@@ -167,6 +167,19 @@ def _report() -> dict[str, object]:
     return out
 
 
+def _review(rebalance_date: str | None = None) -> dict[str, object]:
+    from quant_a.review import _load_context, attribution, execution_scorecard
+
+    ctx = _load_context()
+    return {"attribution": attribution(ctx), "execution": execution_scorecard(rebalance_date, ctx)}
+
+
+def _factor_health() -> dict[str, object]:
+    from quant_a.review import factor_health
+
+    return factor_health()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -191,6 +204,9 @@ def main() -> None:
     h = sub.add_parser("holdings")
     h.add_argument("--refresh", action="store_true")
     sub.add_parser("next-rebalance")
+    rv = sub.add_parser("review")
+    rv.add_argument("--date", default=None)
+    sub.add_parser("factor-health")
 
     args = parser.parse_args()
     if args.cmd == "add-trade":
@@ -208,6 +224,10 @@ def main() -> None:
         print(json.dumps(_holdings(refresh=args.refresh), ensure_ascii=False, default=str))
     elif args.cmd == "next-rebalance":
         print(json.dumps(_next_rebalance(), ensure_ascii=False))
+    elif args.cmd == "review":
+        print(json.dumps(_review(args.date), ensure_ascii=False, default=str))
+    elif args.cmd == "factor-health":
+        print(json.dumps(_factor_health(), ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":
