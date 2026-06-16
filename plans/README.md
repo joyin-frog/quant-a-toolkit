@@ -24,12 +24,30 @@ and the `web/` frontend was never committed). Consequences:
 
 | Plan | Title                                                          | Finding | Priority | Effort | Depends on | Status |
 |------|----------------------------------------------------------------|---------|----------|--------|------------|--------|
-| 001  | Establish a pytest baseline + core unit tests                  | A       | P1       | M      | —          | TODO   |
-| 002  | Sanitize NaN/Inf in `cs_web` JSON output                       | B       | P1       | S      | 001        | TODO   |
-| 003  | Keep post-cache trades in `portfolio_db.reconstruct`           | G       | P1       | S      | 001        | TODO   |
-| 004  | Fix benchmark `inf` bug in `factor_pipeline`                   | C       | P2       | S      | 001        | TODO   |
+| 001  | Establish a pytest baseline + core unit tests                  | A       | P1       | M      | —          | DONE   |
+| 002  | Sanitize NaN/Inf in `cs_web` JSON output                       | B       | P1       | S      | 001        | DONE   |
+| 003  | Keep post-cache trades in `portfolio_db.reconstruct`           | G       | P1       | S      | 001        | DONE   |
+| 004  | Fix benchmark `inf` bug in `factor_pipeline`                   | C       | P2       | S      | 001        | DONE   |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale).
+
+### Execution record (2026-06-16)
+
+All four plans were executed by dispatched `general-purpose` executor subagents (one per plan;
+001 first, then 002/003/004 in parallel) and reviewed by the advisor before each commit. Work was
+done on the isolated branch `worktree-csi1000-golden-cross`, on top of baseline commit `3dbb8ae`
+(which snapshots the previously-uncommitted session work). Tests run on the project venv
+(`/Users/gyro/codex/A/.venv`, pytest 9.1.0). Final state: **13 tests, all passing**.
+
+| Plan | Commit    | Result                                                                 |
+|------|-----------|------------------------------------------------------------------------|
+| 001  | `85e5190` | pytest config + 8 unit tests (metrics / factor selection / web helpers) |
+| 002  | `dc827f7` | `_num` sanitizer in `cs_web` + 2 tests                                  |
+| 003  | `9d3e37e` | index-extend in `reconstruct` + 2 tests                                 |
+| 004  | `6ee6836` | inf guard in `factor_pipeline._benchmark_returns` + 1 test              |
+
+Not yet merged to `main` — merging is the user's decision. The `web/` embedded git repo was left
+untouched (out of scope for all plans).
 
 ## Dependency notes
 
