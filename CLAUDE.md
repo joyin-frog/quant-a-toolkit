@@ -25,8 +25,13 @@ NO_PROXY=".eastmoney.com,push2his.eastmoney.com" no_proxy=".eastmoney.com,push2h
 .venv/bin/pip install -e .
 ```
 
-### 烟测
-当前没有测试和 lint，默认用主流程烟测：
+### 测试
+单元测试用 pytest（离线、纯逻辑：绩效指标 / 因子选股含缓冲带 / JSON 的 NaN-Inf 清洗 / 实盘净值重建）：
+```bash
+.venv/bin/pip install -e ".[dev]"   # 首次装测试依赖（pytest）
+.venv/bin/python -m pytest           # 跑全部（当前 13 个，全绿）
+```
+端到端 / 抓数路径没有单测，仍用主流程烟测（需要数据 / 网络）：
 ```bash
 PYTHONPATH=src .venv/bin/python main.py
 ```
@@ -100,7 +105,9 @@ cd web && npm run dev    # → http://localhost:3000
 
 ## 架构
 
-这是一个最小化的 A 股 / ETF 轮动研究脚手架，核心逻辑都在 `src/quant_a`，根目录 `main.py` 只是入口。
+核心逻辑都在 `src/quant_a`。最初是最小化的沪深300 / ETF 轮动脚手架（`main.py` 入口），现已长出多套并行策略
+（主力多因子 `factor_pipeline`、核心卫星 `cs_pipeline`、金叉对照 `gc_pipeline`）+ 网页前端（`web/`）+ SQLite
+实盘记账（`portfolio_db` / `portfolio_web`）。下面的“主流程”特指旧的 `main.py` 轮动入口：
 
 主流程在 `src/quant_a/main.py`：
 1. 刷新行情缓存
@@ -129,6 +136,13 @@ cd web && npm run dev    # → http://localhost:3000
   - `factor_pipeline.py`：主力策略总控入口（回测/指标/基准对比/下单清单/报告图）
   - `trade_rules.py`：合格股票过滤（流动性/ST/停牌/上市天数）
 - 金叉择时（对照，非主力）：`signals.py`（金叉信号）、`event_backtest.py`（事件驱动回测）、`gc_pipeline.py`（入口）
+- **核心-卫星 + 网页 + 实盘记账**：
+  - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测
+  - `cs_pipeline.py` / `cs_web.py`：核心卫星总控 / 网页用 JSON 入口
+  - `fundamentals.py`：价值/质量/股东人数因子（按报告期 + 滞后对齐）
+  - `walkforward.py`：逐年 / 滚动验证；`refresh_cs.py`：增量刷新行情缓存
+  - `portfolio_db.py` / `portfolio_web.py`：SQLite 实盘记账 / 绩效 CLI（add-trade / report / holdings…）
+- 测试：`tests/`（pytest，纯逻辑离线单测）
 
 ## 关键约束
 
@@ -136,12 +150,12 @@ cd web && npm run dev    # → http://localhost:3000
 - live 抓数失败但本地有缓存时，会继续使用缓存；只有“无缓存且抓数失败”才报错
 - 当前因子分析基于策略真实使用的打分：`momentum.where(eligible)`
 - 输出目录固定为：`data/`、`orders/`、`reports/`
-- 当前不是通用框架，只有一套周频轮动策略；不要把逻辑继续堆到根目录 `main.py`
+- 现在有多套并行策略（主力 `factor_pipeline`、核心卫星 `cs_pipeline`、金叉对照 `gc_pipeline`、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
 
 ## 当前限制
 
-- 暂无自动化测试
-- 暂无 lint / format 配置
+- 已有 pytest 单元测试（`tests/`，纯逻辑 / 离线），但覆盖仍局部；抓数 / 回测端到端仍靠主流程烟测
+- 暂无 lint / format / CI 配置
 - 行情抓取依赖 AkShare / Eastmoney 可用性
 - 两套回测引擎执行细节不同，指标有差异是正常的
 - 股票池较小时，Alphalens 可能只返回 warning，分析价值有限
