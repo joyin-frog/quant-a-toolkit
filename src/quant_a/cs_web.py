@@ -9,9 +9,19 @@ from __future__ import annotations
 import argparse
 import json
 
+import numpy as np
 import pandas as pd
 
 from quant_a.cs_pipeline import run_cs_pipeline
+
+
+def _num(x) -> float | None:
+    """NaN/Inf → None（JS 的 JSON.parse 不认 NaN，必须清洗）。"""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 4) if np.isfinite(v) else None
 
 
 def _sample_curve(curve: pd.Series, max_points: int = 240) -> list[dict[str, object]]:
@@ -20,7 +30,7 @@ def _sample_curve(curve: pd.Series, max_points: int = 240) -> list[dict[str, obj
     if len(monthly) > max_points:
         step = len(monthly) // max_points + 1
         monthly = monthly.iloc[::step]
-    return [{"date": d.strftime("%Y-%m"), "value": round(float(v), 4)} for d, v in monthly.items()]
+    return [{"date": d.strftime("%Y-%m"), "value": _num(v)} for d, v in monthly.items()]
 
 
 def build_payload(capital: float, holdings: int, ai_weight: float) -> dict[str, object]:
@@ -39,11 +49,11 @@ def build_payload(capital: float, holdings: int, ai_weight: float) -> dict[str, 
         "params": {"capital": capital, "holdings": holdings, "ai_weight": ai_weight},
         "as_of": end.strftime("%Y-%m-%d"),
         "range": f"{start:%Y-%m-%d} ~ {end:%Y-%m-%d}",
-        "metrics": {k: round(float(v), 4) for k, v in result["metrics"].items()},
-        "benchmark": {k: round(float(v), 4) for k, v in result["benchmark_metrics"].items()},
-        "rolling12m": {k: round(float(v), 4) for k, v in result["rolling12m"].items()},
+        "metrics": {k: _num(v) for k, v in result["metrics"].items()},
+        "benchmark": {k: _num(v) for k, v in result["benchmark_metrics"].items()},
+        "rolling12m": {k: _num(v) for k, v in result["rolling12m"].items()},
         "core_sectors": result["core_sectors"],
-        "avg_cash_pct": round(float(result["avg_cash_pct"]), 4),
+        "avg_cash_pct": _num(result["avg_cash_pct"]),
         "invested": float(buy_list.attrs.get("invested", 0)),
         "cash_left": float(buy_list.attrs.get("cash_left", 0)),
         "holdings_list": buy_list.to_dict(orient="records"),
