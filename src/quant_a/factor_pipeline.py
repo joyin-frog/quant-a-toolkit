@@ -34,7 +34,8 @@ from quant_a.walkforward import per_year_table, rolling_return_summary, summariz
 def _benchmark_returns(close_matrix: pd.DataFrame, candidate_mask: pd.DataFrame) -> pd.Series:
     # 公平基准 = 月度等权持有【全部合格股】（同样月调、但不选股）。
     # 策略相对它的超额 = 纯粹的"选股"能力。月调让赢家在月内复利，口径与策略一致。
-    daily = close_matrix.pct_change(fill_method=None)
+    # 个别脏价格(0→正)会让 pct_change 出 inf、cumprod 炸成无穷，先把 inf 收益清成 0（与 cs_pipeline 一致）。
+    daily = close_matrix.pct_change(fill_method=None).replace([float("inf"), float("-inf")], 0.0)
     rebal = rebalance_dates(close_matrix.index)
     weights = pd.DataFrame(0.0, index=close_matrix.index, columns=close_matrix.columns)
     for date in rebal:
