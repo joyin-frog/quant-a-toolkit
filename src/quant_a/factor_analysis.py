@@ -1,6 +1,6 @@
 import pandas as pd
 
-from quant_a.strategy import compute_strategy_signals, rebalance_dates
+from quant_a.strategy import compute_strategy_signals
 
 
 FORWARD_PERIODS = (1, 5, 10, 20)
@@ -28,7 +28,11 @@ def _format_analysis_error(error: Exception) -> str:
 
 
 # 研究层只关心“因子值 + 未来收益”的整理，不参与回测执行或仓位计算。
-def run_factor_analysis(close_matrix: pd.DataFrame, momentum_window: int | None = None) -> dict[str, object]:
+def run_factor_analysis(
+    close_matrix: pd.DataFrame,
+    momentum_window: int | None = None,
+    candidate_mask: pd.DataFrame | None = None,
+) -> dict[str, object]:
     try:
         import alphalens.performance as al_performance
         import alphalens.utils as al_utils
@@ -36,11 +40,13 @@ def run_factor_analysis(close_matrix: pd.DataFrame, momentum_window: int | None 
         return _empty_analysis([f"factor analysis unavailable: {error}"])
 
     factor_score = compute_strategy_signals(close_matrix, momentum_window=momentum_window)["factor_score"]
-    analysis_dates = rebalance_dates(close_matrix.index)
-    factor_frame = factor_score.loc[analysis_dates]
+    if candidate_mask is not None:
+        candidate_mask = candidate_mask.reindex(index=close_matrix.index, columns=close_matrix.columns).fillna(False)
+        factor_score = factor_score.where(candidate_mask)
+    factor_frame = factor_score
     factor_series = factor_frame.stack().rename("factor")
     if factor_series.empty:
-        return _empty_analysis(["factor analysis skipped: no non-null factor scores on rebalance dates"])
+        return _empty_analysis(["factor analysis skipped: no non-null factor scores on available dates"])
 
     counts = factor_series.groupby(level=0).size()
     valid_dates = counts[counts >= 2].index
@@ -75,7 +81,7 @@ def run_factor_analysis(close_matrix: pd.DataFrame, momentum_window: int | None 
     warnings = []
     skipped_dates = len(counts) - len(valid_dates)
     if skipped_dates > 0:
-        warnings.append(f"factor analysis skipped {skipped_dates} rebalance date(s) with fewer than 2 assets")
+        warnings.append(f"factor analysis skipped {skipped_dates} date(s) with fewer than 2 assets")
 
     return {
         "factor_data": factor_data,

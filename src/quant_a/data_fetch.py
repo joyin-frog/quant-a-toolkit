@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import date
+from functools import lru_cache
 
 import akshare as ak
 import pandas as pd
@@ -18,6 +19,13 @@ COLUMN_MAP = {
     "成交量": "volume",
 }
 STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+YFINANCE_COLUMN_MAP = {
+    "Open": "open",
+    "High": "high",
+    "Low": "low",
+    "Close": "close",
+    "Volume": "volume",
+}
 
 
 EASTMONEY_NO_PROXY = [".eastmoney.com", "push2his.eastmoney.com"]
@@ -56,7 +64,7 @@ def _fetch_with_retry(loader) -> pd.DataFrame:
         requests.get = original_get
 
 
-# 无论来源是 ETF 还是 A 股，最终都归一化成统一的 OHLCV schema，保证缓存层和回测层完全解耦。
+# 无论来源是 AkShare 还是 yfinance，最终都归一化成统一的 OHLCV schema，保证缓存层和回测层完全解耦。
 def _normalize_bars(bars: pd.DataFrame) -> pd.DataFrame:
     bars = bars.rename(columns=COLUMN_MAP)
     bars = bars.loc[:, STANDARD_COLUMNS].copy()
@@ -67,38 +75,104 @@ def _normalize_bars(bars: pd.DataFrame) -> pd.DataFrame:
     return bars.reset_index(drop=True)
 
 
-def fetch_etf_bars(symbol: str) -> pd.DataFrame:
+def _normalize_yfinance_bars(bars: pd.DataFrame) -> pd.DataFrame:
+    normalized = bars.rename(columns=YFINANCE_COLUMN_MAP).copy()
+    normalized.index = pd.to_datetime(normalized.index)
+    normalized.index.name = "date"
+    normalized = normalized.reset_index()
+    normalized = normalized.loc[:, STANDARD_COLUMNS].copy()
+    normalized["date"] = pd.to_datetime(normalized["date"]).dt.tz_localize(None)
+    for column in STANDARD_COLUMNS[1:]:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    normalized = normalized.dropna(subset=["open", "high", "low", "close"])
+    normalized = normalized.sort_values("date").drop_duplicates(subset="date", keep="last")
+    return normalized.reset_index(drop=True)
+
+
+def _to_yfinance_symbol(symbol: str, kind: str) -> str:
+    if kind != "stock":
+        raise ValueError(f"Unsupported instrument type for {symbol}: {kind}")
+    suffix = ".SS" if symbol.startswith(("5", "6", "9")) else ".SZ"
+    return f"{symbol}{suffix}"
+
+
+def _download_with_yfinance(symbol: str, kind: str) -> pd.DataFrame:
+    try:
+        import yfinance as yf
+    except ImportError as error:
+        raise RuntimeError("yfinance is not installed") from error
+
     end_date = END_DATE or date.today().strftime("%Y-%m-%d")
-    bars = _fetch_with_retry(
-        lambda: ak.fund_etf_hist_em(
-            symbol=symbol,
-            period="daily",
-            start_date=START_DATE.replace("-", ""),
-            end_date=end_date.replace("-", ""),
-            adjust=ADJUST,
-        )
+    yahoo_symbol = _to_yfinance_symbol(symbol, kind)
+    bars = yf.download(
+        yahoo_symbol,
+        start=START_DATE,
+        end=end_date,
+        auto_adjust=True,
+        progress=False,
+        actions=False,
+        multi_level_index=False,
     )
-    return _normalize_bars(bars)
+    if bars.empty:
+        raise RuntimeError(f"yfinance returned no rows for {symbol} ({yahoo_symbol})")
+    return bars
 
 
-def fetch_stock_bars(symbol: str) -> pd.DataFrame:
+@lru_cache(maxsize=1)
+def fetch_current_st_symbols() -> set[str]:
+    try:
+        st_board = _fetch_with_retry(lambda: ak.stock_zh_a_st_em())
+    except Exception:
+        return set()
+
+    if "代码" not in st_board.columns:
+        return set()
+    return {str(symbol).zfill(6) for symbol in st_board["代码"].dropna().astype(str)}
+
+
+def fetch_stock_bars(symbol: str, start: str | None = None) -> pd.DataFrame:
     end_date = END_DATE or date.today().strftime("%Y-%m-%d")
-    bars = _fetch_with_retry(
-        lambda: ak.stock_zh_a_hist(
-            symbol=symbol,
-            period="daily",
-            start_date=START_DATE.replace("-", ""),
-            end_date=end_date.replace("-", ""),
-            adjust=ADJUST,
+    start_date = (start or START_DATE).replace("-", "")
+    try:
+        bars = _fetch_with_retry(
+            lambda: ak.stock_zh_a_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start_date,
+                end_date=end_date.replace("-", ""),
+                adjust=ADJUST,
+            )
         )
-    )
-    return _normalize_bars(bars)
+        return _normalize_bars(bars)
+    except requests.RequestException:
+        return _normalize_yfinance_bars(_download_with_yfinance(symbol, "stock"))
 
 
-# 统一抓数入口；未来如果接别的资产类型，优先在这里扩展分发而不是改下游策略和回测。
-def fetch_bars(symbol: str, kind: str) -> pd.DataFrame:
-    if kind == "etf":
-        return fetch_etf_bars(symbol)
+def fetch_stock_metadata(symbol: str) -> dict[str, object]:
+    try:
+        info = _fetch_with_retry(lambda: ak.stock_individual_info_em(symbol=symbol))
+    except requests.RequestException as error:
+        raise RuntimeError(f"Failed to fetch metadata for {symbol}") from error
+
+    if "item" not in info.columns or "value" not in info.columns:
+        raise RuntimeError(f"Unexpected metadata schema for {symbol}")
+
+    info_map = dict(zip(info["item"].astype(str), info["value"]))
+    listing_date_raw = str(info_map.get("上市时间", ""))
+    listing_date = pd.to_datetime(listing_date_raw, format="%Y%m%d", errors="coerce")
+    stock_name = str(info_map.get("股票简称", "")).strip().replace(" ", "")
+    is_st = symbol in fetch_current_st_symbols() or "ST" in stock_name.upper()
+
+    return {
+        "symbol": str(symbol).zfill(6),
+        "name": stock_name,
+        "listing_date": listing_date,
+        "is_st": bool(is_st),
+    }
+
+
+# 统一抓数入口；当前版本只保留 A 股个股。start 给定时只抓该日期起的增量。
+def fetch_bars(symbol: str, kind: str, start: str | None = None) -> pd.DataFrame:
     if kind == "stock":
-        return fetch_stock_bars(symbol)
+        return fetch_stock_bars(symbol, start=start)
     raise ValueError(f"Unsupported instrument type for {symbol}: {kind}")
