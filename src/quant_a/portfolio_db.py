@@ -122,6 +122,16 @@ def reconstruct() -> dict[str, object] | None:
 
     start = trades["date"].min()
     index = close.index[close.index >= start]
+    # 把【晚于最后一根缓存 K 线】的成交/资金日期并入索引并 ffill 价格，否则这些交易会被
+    # _first_on_or_after 丢弃（净值漏算，甚至全部晚于缓存时 index[-1] 崩溃）。范围内的成交
+    # 行为不变：仍由 _first_on_or_after 向后吸附到下一个交易日。
+    last_cached = close.index.max()
+    event_dates = list(trades["date"])
+    if not flows.empty:
+        event_dates += list(flows["date"])
+    tail = pd.DatetimeIndex(sorted({pd.Timestamp(d) for d in event_dates if pd.Timestamp(d) > last_cached}))
+    if len(tail):
+        index = index.append(tail).unique().sort_values()
     close = close.reindex(index).ffill()
 
     deltas = pd.DataFrame(0.0, index=index, columns=codes)
