@@ -61,17 +61,26 @@ def _refresh_full(symbol: str) -> str:
     return "full"
 
 
+def _log(msg: str) -> None:
+    """进度打到 stderr（stdout 留给最后那行 JSON）；网页端 runPython 会把 stderr 实时转到 dev 终端。"""
+    print(msg, file=sys.stderr, flush=True)
+
+
 def _pass(work, syms: list[str], workers: int) -> tuple[Counter, list[str]]:
     """并行刷一批,返回(模式计数, 失败的代码)。每只各写自己的缓存文件,线程安全。"""
     modes: Counter[str] = Counter()
     failed: list[str] = []
+    done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(work, s): s for s in syms}
         for fut in as_completed(futures):
+            done += 1
             try:
                 modes[fut.result()] += 1
             except Exception:  # noqa: BLE001
                 failed.append(futures[fut])
+            if done % 50 == 0 or done == len(syms):
+                _log(f"[refresh]   进度 {done}/{len(syms)}（失败 {len(failed)}）")
     return modes, failed
 
 
@@ -79,12 +88,18 @@ def refresh(full: bool = False, workers: int = 8) -> dict[str, object]:
     hs = pd.read_csv(DATA_DIR / "hs300_mainboard.csv", dtype=str)["symbol"].str.zfill(6).tolist()
     symbols = sorted(set(hs) | set(ai_symbols()))
     work = _refresh_full if full else _refresh_one
+    _log(f"[refresh] 开始：{len(symbols)} 只 | workers={workers} | full={full}")
     # 纯网络 I/O -> 并行拉。第一遍高并发抢速度;失败的(多为 eastmoney 限流抖动)第二遍降并发补刷。
     modes, failed = _pass(work, symbols, workers)
+    _log(f"[refresh] 第一遍完成：ok={len(symbols) - len(failed)} fail={len(failed)}")
     if failed:
-        modes2, failed = _pass(work, failed, max(2, workers // 3))
+        w2 = max(2, workers // 3)
+        _log(f"[refresh] 第二遍补刷 {len(failed)} 只（workers={w2}）…")
+        modes2, failed = _pass(work, failed, w2)
         modes += modes2
-    return {"ok": len(symbols) - len(failed), "fail": len(failed), "modes": dict(modes), "total": len(symbols)}
+    result = {"ok": len(symbols) - len(failed), "fail": len(failed), "modes": dict(modes), "total": len(symbols)}
+    _log(f"[refresh] 完成：{result}")
+    return result
 
 
 def main() -> None:

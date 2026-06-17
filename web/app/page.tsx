@@ -230,12 +230,15 @@ export default function Page() {
 
   async function refresh() {
     setRefreshing(true);
-    const t = toast.loading("刷新行情中…（约几分钟）");
+    const t = toast.loading("刷新行情中…（约 1-2 分钟，终端可看进度）");
     try {
       const res = await fetch("/api/refresh", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "刷新失败");
-      toast.success("行情已更新", { id: t });
+      toast.success(
+        `行情已更新：${json.ok}/${json.total} 只${json.fail ? `（${json.fail} 只失败，下次补）` : ""}`,
+        { id: t },
+      );
     } catch (e) {
       toast.error((e as Error).message, { id: t });
     } finally {
