@@ -2,9 +2,18 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { LineChartIcon, NotebookPenIcon, PlayIcon, RefreshCwIcon } from "lucide-react";
+import {
+  InfoIcon,
+  LineChartIcon,
+  MoonIcon,
+  NotebookPenIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  SunIcon,
+} from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
+import { useTheme } from "next-themes";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +46,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Toaster } from "@/components/ui/sonner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type Holding = {
   sleeve: string;
@@ -89,21 +103,59 @@ const chartConfig = {
   benchmark: { label: "沪深300等权基准", color: "var(--chart-2)" },
 } satisfies ChartConfig;
 
+// Item 3: Tooltip helper for jargon terms
+function InfoTip({ content }: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <InfoIcon className="ml-1 inline size-3.5 cursor-help text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <span>{content}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// Item 7: Theme toggle button
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={resolvedTheme === "dark" ? "切换到亮色模式" : "切换到暗色模式"}
+      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+    >
+      {resolvedTheme === "dark" ? (
+        <SunIcon className="size-4" />
+      ) : (
+        <MoonIcon className="size-4" />
+      )}
+    </Button>
+  );
+}
+
 function Metric({
   label,
   value,
   valueClass,
   hint,
+  tooltip,
 }: {
   label: string;
   value: string;
   valueClass?: string;
   hint?: string;
+  tooltip?: string;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardDescription>{label}</CardDescription>
+        <CardDescription className="flex items-center">
+          {label}
+          {tooltip ? <InfoTip content={tooltip} /> : null}
+        </CardDescription>
         <CardTitle className={cn("text-2xl tabular-nums", valueClass)}>{value}</CardTitle>
       </CardHeader>
       {hint ? (
@@ -115,43 +167,123 @@ function Metric({
   );
 }
 
-function Results({ data }: { data: Result }) {
-  const m = data.metrics;
-  const r = data.rolling12m;
+// Item 2 & 4: Skeleton for results area during loading
+function ResultsSkeleton() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <Metric label="总收益" value={pct(m.total_return)} valueClass={tone(m.total_return)} hint={data.range} />
-        <Metric label="年化收益" value={pct(m.annualized_return)} valueClass={tone(m.annualized_return)} />
-        <Metric label="最大回撤" value={pct(m.max_drawdown)} valueClass={tone(m.max_drawdown)} />
-        <Metric label="夏普比率" value={m.sharpe.toFixed(2)} valueClass="text-primary" />
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="mt-2 h-8 w-28" />
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="mt-1 h-4 w-48" />
+        </CardHeader>
+        <CardContent>
+          {/* Item 4: Chart loading skeleton */}
+          <div
+            aria-label="净值曲线加载中"
+            className="flex h-[300px] w-full flex-col items-center justify-center gap-4"
+          >
+            <Skeleton className="h-[260px] w-full" />
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-5 w-40" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-9 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Results({ data }: { data: Result }) {
+  const m = data.metrics;
+  const r = data.rolling12m;
+
+  // Item 1: Sleeve breakdown
+  const coreHoldings = data.holdings_list.filter((h) => h.sleeve === "核心");
+  const aiHoldings = data.holdings_list.filter((h) => h.sleeve !== "核心");
+  const coreCost = coreHoldings.reduce((s, h) => s + h.cost, 0);
+  const aiCost = aiHoldings.reduce((s, h) => s + h.cost, 0);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <Metric
+          label="总收益"
+          value={pct(m.total_return)}
+          valueClass={tone(m.total_return)}
+          hint={data.range}
+        />
+        <Metric
+          label="年化收益"
+          value={pct(m.annualized_return)}
+          valueClass={tone(m.annualized_return)}
+          tooltip="以全年252交易日为基准，把回测期总收益折算成每年的等效收益率。"
+        />
+        <Metric
+          label="最大回撤"
+          value={pct(m.max_drawdown)}
+          valueClass={tone(m.max_drawdown)}
+          tooltip="回测期内从峰值跌到谷底的最大跌幅，衡量最坏情况下的亏损幅度。"
+        />
+        <Metric
+          label="夏普比率"
+          value={m.sharpe.toFixed(2)}
+          valueClass="text-primary"
+          tooltip="每承受一单位风险所获得的超额收益，越高越好（>1 算不错，>1.5 优秀）。"
+        />
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>净值曲线</CardTitle>
           <CardDescription>
-            vs 基准 · 滚动12月中位{" "}
+            vs 基准 · 滚动12月
+            <InfoTip content="把回测期每12个月滑动一次，计算每段的年化收益，中位数反映「大多数时候」的真实感受。" />
+            {" "}中位{" "}
             <span className={cn("font-medium", tone(r.median))}>{pct(r.median)}</span> · 为正{" "}
             {(r.pct_positive * 100).toFixed(0)}%
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ChartContainer config={chartConfig} className="h-[300px] w-full">
-            <LineChart data={data.curve} margin={{ left: 4, right: 12, top: 8 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
-              <YAxis tickLine={false} axisLine={false} width={40} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <Line dataKey="strategy" stroke="var(--color-strategy)" strokeWidth={2.2} dot={false} />
-              <Line
-                dataKey="benchmark"
-                stroke="var(--color-benchmark)"
-                strokeWidth={1.5}
-                dot={false}
-              />
-            </LineChart>
-          </ChartContainer>
+          {/* Item 4: chart container with aria-label */}
+          <div aria-label="本组合 vs 沪深300等权基准 净值曲线">
+            <ChartContainer config={chartConfig} className="h-[300px] w-full">
+              <LineChart data={data.curve} margin={{ left: 4, right: 12, top: 8 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  width={48}
+                  label={{ value: "净值(基1)", angle: -90, position: "insideLeft", offset: 12, style: { fontSize: 11 } }}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="strategy" stroke="var(--color-strategy)" strokeWidth={2.2} dot={false} />
+                <Line
+                  dataKey="benchmark"
+                  stroke="var(--color-benchmark)"
+                  strokeWidth={1.5}
+                  dot={false}
+                />
+              </LineChart>
+            </ChartContainer>
+          </div>
         </CardContent>
       </Card>
 
@@ -159,48 +291,57 @@ function Results({ data }: { data: Result }) {
         <CardHeader>
           <CardTitle>本月下单清单（截至 {data.as_of}）</CardTitle>
           <CardDescription>
-            投入 {yuan(data.invested)} · 剩余现金 {yuan(data.cash_left)} · 共{" "}
-            {data.holdings_list.length} 只 · 核心行业：
+            投入 {yuan(data.invested)} · 剩余现金 {yuan(data.cash_left)} ·{" "}
+            {/* Item 1: Sleeve breakdown in title */}
+            共 {data.holdings_list.length} 只（核心 {coreHoldings.length} · AI卫星 {aiHoldings.length}）· 核心行业：
             {Object.entries(data.core_sectors)
               .map(([k, v]) => `${k}${v}`)
               .join(" ") || "已分散"}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>仓位</TableHead>
-                <TableHead>代码</TableHead>
-                <TableHead>名称</TableHead>
-                <TableHead className="text-right">现价</TableHead>
-                <TableHead className="text-right">手数</TableHead>
-                <TableHead className="text-right">金额</TableHead>
-                <TableHead className="text-right">权重</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.holdings_list.map((h) => (
-                <TableRow key={h.code}>
-                  <TableCell>
-                    <Badge variant={h.sleeve === "核心" ? "secondary" : "default"}>
-                      {h.sleeve === "核心" ? "核心" : `AI·${h.theme}`}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="tabular-nums">{h.code}</TableCell>
-                  <TableCell className="font-medium">{h.name}</TableCell>
-                  <TableCell className="text-right tabular-nums">{h.price.toFixed(2)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{h.lots}</TableCell>
-                  <TableCell className="text-right tabular-nums">{yuan(h.cost)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {(h.weight * 100).toFixed(1)}%
-                  </TableCell>
+          {/* Item 5: Scrollable table with sticky header */}
+          <div className="max-h-[26rem] overflow-y-auto">
+            <Table>
+              <TableHeader className="bg-card sticky top-0 z-10">
+                <TableRow>
+                  <TableHead>仓位</TableHead>
+                  <TableHead>代码</TableHead>
+                  <TableHead>名称</TableHead>
+                  <TableHead className="text-right">现价</TableHead>
+                  <TableHead className="text-right">手数</TableHead>
+                  <TableHead className="text-right">金额</TableHead>
+                  <TableHead className="text-right">权重</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {data.holdings_list.map((h) => (
+                  <TableRow key={h.code}>
+                    <TableCell>
+                      <Badge variant={h.sleeve === "核心" ? "secondary" : "default"}>
+                        {h.sleeve === "核心" ? "核心" : `AI·${h.theme}`}
+                      </Badge>
+                    </TableCell>
+                    {/* Item 10: font-mono for stock codes */}
+                    <TableCell className="font-mono tabular-nums">{h.code}</TableCell>
+                    <TableCell className="font-medium">{h.name}</TableCell>
+                    <TableCell className="text-right tabular-nums">{h.price.toFixed(2)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{h.lots}</TableCell>
+                    <TableCell className="text-right tabular-nums">{yuan(h.cost)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {(h.weight * 100).toFixed(1)}%
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex flex-col items-start gap-2">
+          {/* Item 1: Sleeve subtotal row */}
+          <p className="text-muted-foreground text-xs tabular-nums">
+            核心投入 {yuan(coreCost)} · AI卫星投入 {yuan(aiCost)} · 现金 {yuan(data.cash_left)}
+          </p>
           <p className="text-muted-foreground text-xs">⚠️ AI卫星是主动赌注；涨跌停就跳过。</p>
         </CardFooter>
       </Card>
@@ -208,14 +349,29 @@ function Results({ data }: { data: Result }) {
   );
 }
 
+// Item 8: Empty state for main page right panel
 function EmptyHint() {
   return (
     <Card className="border-dashed">
-      <CardContent className="text-muted-foreground flex min-h-[280px] flex-col items-center justify-center gap-3 text-center text-sm">
-        <LineChartIcon className="text-primary size-8" />
-        <p>填参数 → ① 刷新 → ② 生成</p>
+      <CardContent className="text-muted-foreground flex min-h-[360px] flex-col items-center justify-center gap-4 text-center text-sm">
+        <LineChartIcon className="text-primary size-10" />
+        <div className="flex flex-col gap-1.5">
+          <p className="text-foreground font-medium">还没有数据</p>
+          <p>① 点左侧「刷新行情」拉取最新价格</p>
+          <p>② 点「生成清单」跑回测 → 这里出净值曲线与下单清单</p>
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+// Item 4: Empty chart state
+function ChartEmpty() {
+  return (
+    <div className="border-border flex h-[300px] w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed">
+      <LineChartIcon className="text-muted-foreground size-8" />
+      <p className="text-muted-foreground text-sm">填参数 → 生成后这里出净值曲线</p>
+    </div>
   );
 }
 
@@ -299,13 +455,17 @@ export default function Page() {
           </h1>
           <p className="text-muted-foreground text-sm">沪深300核心 + AI卫星</p>
         </div>
-        <Link
-          href="/portfolio"
-          className="text-primary hover:text-primary/80 flex items-center gap-1.5 text-sm font-medium"
-        >
-          <NotebookPenIcon className="size-4" />
-          实盘记账与绩效
-        </Link>
+        {/* Item 7: Theme toggle + nav link in header */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/portfolio"
+            className="text-primary hover:text-primary/80 flex items-center gap-1.5 text-sm font-medium"
+          >
+            <NotebookPenIcon className="size-4" />
+            实盘记账与绩效
+          </Link>
+          <ThemeToggle />
+        </div>
       </header>
 
       <div className="grid items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -367,7 +527,15 @@ export default function Page() {
             </Button>
             {refreshing && progress ? (
               <div className="-mt-1 flex flex-col gap-1">
-                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+                {/* Item 9: progressbar role + aria attrs */}
+                <div
+                  className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
+                  role="progressbar"
+                  aria-valuenow={progress.done}
+                  aria-valuemin={0}
+                  aria-valuemax={progress.total}
+                  aria-label="刷新行情进度"
+                >
                   <div
                     className="bg-primary h-full rounded-full transition-all duration-300"
                     style={{ width: `${Math.round((progress.done / Math.max(progress.total, 1)) * 100)}%` }}
@@ -393,12 +561,24 @@ export default function Page() {
         </Card>
 
         <div className="flex flex-col gap-6">
-          {loading && !data ? (
-            <Skeleton className="h-[400px] w-full" />
+          {/* Item 2 & 8: Loading skeleton vs empty state vs results */}
+          {loading ? (
+            <ResultsSkeleton />
           ) : data ? (
             <Results data={data} />
           ) : (
-            <EmptyHint />
+            // Item 8: proper empty state + Item 4: chart empty state within
+            <div className="flex flex-col gap-6">
+              <EmptyHint />
+              <Card>
+                <CardHeader>
+                  <CardTitle>净值曲线</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ChartEmpty />
+                </CardContent>
+              </Card>
+            </div>
           )}
         </div>
       </div>

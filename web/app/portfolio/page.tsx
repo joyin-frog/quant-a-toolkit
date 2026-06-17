@@ -2,9 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeftIcon, ClipboardCheckIcon, GaugeIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ClipboardCheckIcon,
+  GaugeIcon,
+  InfoIcon,
+  MoonIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SunIcon,
+} from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
+import { useTheme } from "next-themes";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +36,7 @@ import {
 } from "@/components/ui/chart";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -35,6 +48,11 @@ import {
 } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Toaster } from "@/components/ui/sonner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type Trade = {
   id: number;
@@ -145,14 +163,118 @@ const emptyTrade = {
   sleeve: "核心",
 };
 
-function Metric({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
+// Item 3: InfoTip helper
+function InfoTip({ content }: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <InfoIcon className="ml-1 inline size-3.5 cursor-help text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <span>{content}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// Item 7: Theme toggle
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={resolvedTheme === "dark" ? "切换到亮色模式" : "切换到暗色模式"}
+      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+    >
+      {resolvedTheme === "dark" ? (
+        <SunIcon className="size-4" />
+      ) : (
+        <MoonIcon className="size-4" />
+      )}
+    </Button>
+  );
+}
+
+// Item 6: Sort helper types
+type SortDir = "asc" | "desc" | null;
+
+function SortIcon({ dir }: { dir: SortDir }) {
+  if (dir === "asc") return <ChevronUpIcon className="ml-1 inline size-3.5" />;
+  if (dir === "desc") return <ChevronDownIcon className="ml-1 inline size-3.5" />;
+  return <ChevronUpIcon className="ml-1 inline size-3.5 opacity-30" />;
+}
+
+function useSortState<T extends string>(initial: T) {
+  const [sortKey, setSortKey] = useState<T>(initial);
+  const [sortDir, setSortDir] = useState<SortDir>(null);
+
+  function toggle(key: T) {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("desc");
+    } else {
+      setSortDir((prev) => (prev === "desc" ? "asc" : prev === "asc" ? null : "desc"));
+    }
+  }
+
+  function ariaSortFor(key: T): React.AriaAttributes["aria-sort"] {
+    if (sortKey !== key || sortDir === null) return "none";
+    return sortDir === "asc" ? "ascending" : "descending";
+  }
+
+  function dirFor(key: T): SortDir {
+    return sortKey === key ? sortDir : null;
+  }
+
+  return { sortKey, sortDir, toggle, ariaSortFor, dirFor };
+}
+
+function Metric({ label, value, valueClass, tooltip }: { label: string; value: string; valueClass?: string; tooltip?: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardDescription>{label}</CardDescription>
+        <CardDescription className="flex items-center">
+          {label}
+          {tooltip ? <InfoTip content={tooltip} /> : null}
+        </CardDescription>
         <CardTitle className={cn("text-xl tabular-nums", valueClass)}>{value}</CardTitle>
       </CardHeader>
     </Card>
+  );
+}
+
+// Item 2: Skeleton for reporting/reviewing slow operations
+function ReportSkeleton() {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="mt-2 h-7 w-24" />
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
+      <Skeleton className="h-[280px] w-full" />
+    </div>
+  );
+}
+
+function ReviewSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-5">
+        <Skeleton className="size-16 rounded-xl" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+      </div>
+      <Skeleton className="h-[200px] w-full" />
+    </div>
   );
 }
 
@@ -167,6 +289,13 @@ export default function PortfolioPage() {
   const [hLoading, setHLoading] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const [reviewing, setReviewing] = useState(false);
+
+  // Item 6: Sort state for holdings table (pnl_pct / today_pct)
+  const holdingsSort = useSortState<"pnl_pct" | "today_pct">("pnl_pct");
+  // Item 6: Sort state for attribution table
+  const attrSort = useSortState<"contrib" | "ret" | "pnl">("contrib");
+  // Item 6: Sort state for factor health table
+  const fhSort = useSortState<"ic_recent" | "decay">("ic_recent");
 
   const loadTrades = useCallback(async () => {
     const res = await fetch("/api/trades");
@@ -268,17 +397,54 @@ export default function PortfolioPage() {
   const attr = review?.attribution;
   const fh = review?.factor_health;
 
+  // Item 6: Sorted positions
+  const sortedPositions = (() => {
+    const pos = holdings?.positions ?? [];
+    if (holdingsSort.sortDir === null) return pos;
+    return [...pos].sort((a, b) => {
+      const va = (a[holdingsSort.sortKey] ?? 0) as number;
+      const vb = (b[holdingsSort.sortKey] ?? 0) as number;
+      return holdingsSort.sortDir === "asc" ? va - vb : vb - va;
+    });
+  })();
+
+  // Item 6: Sorted attribution holdings
+  const sortedAttr = (() => {
+    const rows = attr?.holdings ?? [];
+    if (attrSort.sortDir === null) return rows;
+    return [...rows].sort((a, b) => {
+      const va = a[attrSort.sortKey] as number;
+      const vb = b[attrSort.sortKey] as number;
+      return attrSort.sortDir === "asc" ? va - vb : vb - va;
+    });
+  })();
+
+  // Item 6: Sorted factor health
+  const sortedFh = (() => {
+    const rows = fh?.factors ?? [];
+    if (fhSort.sortDir === null) return rows;
+    return [...rows].sort((a, b) => {
+      const va = (a[fhSort.sortKey] ?? 0) as number;
+      const vb = (b[fhSort.sortKey] ?? 0) as number;
+      return fhSort.sortDir === "asc" ? va - vb : vb - va;
+    });
+  })();
+
   return (
     <main className="mx-auto flex max-w-[1600px] flex-col gap-6 p-6">
       <Toaster position="top-center" />
       <header className="flex flex-col gap-1">
-        <Link
-          href="/"
-          className="text-muted-foreground hover:text-foreground flex w-fit items-center gap-1 text-sm"
-        >
-          <ArrowLeftIcon className="size-3.5" />
-          返回月度调仓
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link
+            href="/"
+            className="text-muted-foreground hover:text-foreground flex w-fit items-center gap-1 text-sm"
+          >
+            <ArrowLeftIcon className="size-3.5" />
+            返回月度调仓
+          </Link>
+          {/* Item 7: Theme toggle in header */}
+          <ThemeToggle />
+        </div>
         <h1 className="text-2xl font-semibold">
           实盘 <span className="text-primary">记账与绩效</span>
         </h1>
@@ -449,37 +615,52 @@ export default function PortfolioPage() {
                     </span>
                   </div>
                   <div className="max-h-[22rem] overflow-y-auto">
-                  <Table>
-                    <TableHeader className="bg-card sticky top-0 z-10">
-                      <TableRow>
-                        <TableHead>名称</TableHead>
-                        <TableHead className="text-right">成本</TableHead>
-                        <TableHead className="text-right">现价</TableHead>
-                        <TableHead className="text-right">浮盈亏</TableHead>
-                        <TableHead className="text-right">今日</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {holdings.positions.map((p) => (
-                        <TableRow key={p.code}>
-                          <TableCell className="font-medium">
-                            {p.name}
-                            <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
-                              {p.shares}股
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">{p.avg_cost.toFixed(2)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{p.price.toFixed(2)}</TableCell>
-                          <TableCell className={cn("text-right tabular-nums", tone(p.pnl_pct))}>
-                            {pct(p.pnl_pct)}
-                          </TableCell>
-                          <TableCell className={cn("text-right tabular-nums", tone(p.today_pct))}>
-                            {pct(p.today_pct)}
-                          </TableCell>
+                    <Table>
+                      {/* Item 6: Sortable headers for holdings table */}
+                      <TableHeader className="bg-card sticky top-0 z-10">
+                        <TableRow>
+                          <TableHead>名称</TableHead>
+                          <TableHead className="text-right">成本</TableHead>
+                          <TableHead className="text-right">现价</TableHead>
+                          <TableHead
+                            className="cursor-pointer text-right select-none"
+                            aria-sort={holdingsSort.ariaSortFor("pnl_pct")}
+                            onClick={() => holdingsSort.toggle("pnl_pct")}
+                          >
+                            浮盈亏
+                            <SortIcon dir={holdingsSort.dirFor("pnl_pct")} />
+                          </TableHead>
+                          <TableHead
+                            className="cursor-pointer text-right select-none"
+                            aria-sort={holdingsSort.ariaSortFor("today_pct")}
+                            onClick={() => holdingsSort.toggle("today_pct")}
+                          >
+                            今日
+                            <SortIcon dir={holdingsSort.dirFor("today_pct")} />
+                          </TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {sortedPositions.map((p) => (
+                          <TableRow key={p.code}>
+                            <TableCell className="font-medium">
+                              {p.name}
+                              <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
+                                {p.shares}股
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{p.avg_cost.toFixed(2)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{p.price.toFixed(2)}</TableCell>
+                            <TableCell className={cn("text-right tabular-nums", tone(p.pnl_pct))}>
+                              {pct(p.pnl_pct)}
+                            </TableCell>
+                            <TableCell className={cn("text-right tabular-nums", tone(p.today_pct))}>
+                              {pct(p.today_pct)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
                 </div>
               ) : (
@@ -508,7 +689,10 @@ export default function PortfolioPage() {
               </Button>
             </CardHeader>
             <CardContent className="flex flex-col gap-6">
-              {report && !report.empty ? (
+              {/* Item 2: Skeleton during reporting */}
+              {reporting ? (
+                <ReportSkeleton />
+              ) : report && !report.empty ? (
                 <>
                   <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                     <Metric
@@ -516,15 +700,18 @@ export default function PortfolioPage() {
                       value={pct(report.real_metrics?.total_return)}
                       valueClass={tone(report.real_metrics?.total_return)}
                     />
+                    {/* Item 3: Tooltips for jargon metrics */}
                     <Metric
                       label="对基准超额"
                       value={pct(report.excess_vs_benchmark)}
                       valueClass={tone(report.excess_vs_benchmark)}
+                      tooltip="实盘收益 - 基准（核心池等权）收益；正数说明选股创造了价值。"
                     />
                     <Metric
                       label="对回测损耗"
                       value={pct(report.drag_vs_backtest)}
                       valueClass={tone(report.drag_vs_backtest)}
+                      tooltip="实盘比同期策略回测差多少，反映执行滑点、漏买、乱动等纪律代价；越小越好。"
                     />
                     <Metric
                       label="跟踪误差(年化)"
@@ -534,30 +721,40 @@ export default function PortfolioPage() {
                           : `${(report.tracking_error * 100).toFixed(1)}%`
                       }
                       valueClass="text-primary"
+                      tooltip="实盘与策略每日收益偏离幅度的年化标准差；越小说明你执行越贴合策略。"
                     />
                   </div>
-                  <ChartContainer config={chartConfig} className="h-[280px] w-full">
-                    <LineChart data={report.curve} margin={{ left: 4, right: 12, top: 8 }}>
-                      <CartesianGrid vertical={false} />
-                      <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
-                      <YAxis tickLine={false} axisLine={false} width={44} domain={["auto", "auto"]} />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Line dataKey="real" stroke="var(--color-real)" strokeWidth={2.2} dot={false} />
-                      <Line
-                        dataKey="strategy"
-                        stroke="var(--color-strategy)"
-                        strokeWidth={1.5}
-                        strokeDasharray="4 4"
-                        dot={false}
-                      />
-                      <Line
-                        dataKey="benchmark"
-                        stroke="var(--color-benchmark)"
-                        strokeWidth={1.5}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ChartContainer>
+                  {/* Item 9: aria-label on chart container */}
+                  <div aria-label="实盘 vs 回测 vs 基准 净值曲线">
+                    <ChartContainer config={chartConfig} className="h-[280px] w-full">
+                      <LineChart data={report.curve} margin={{ left: 4, right: 12, top: 8 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          width={48}
+                          domain={["auto", "auto"]}
+                          label={{ value: "净值(基1)", angle: -90, position: "insideLeft", offset: 12, style: { fontSize: 11 } }}
+                        />
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        <Line dataKey="real" stroke="var(--color-real)" strokeWidth={2.2} dot={false} />
+                        <Line
+                          dataKey="strategy"
+                          stroke="var(--color-strategy)"
+                          strokeWidth={1.5}
+                          strokeDasharray="4 4"
+                          dot={false}
+                        />
+                        <Line
+                          dataKey="benchmark"
+                          stroke="var(--color-benchmark)"
+                          strokeWidth={1.5}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ChartContainer>
+                  </div>
                   <p className="text-muted-foreground text-xs">实盘(实线) · 回测(虚线) · 基准</p>
                 </>
               ) : (
@@ -584,7 +781,10 @@ export default function PortfolioPage() {
               </Button>
             </CardHeader>
             <CardContent>
-              {exec && !exec.empty ? (
+              {/* Item 2: Skeleton during reviewing */}
+              {reviewing ? (
+                <ReviewSkeleton />
+              ) : exec && !exec.empty ? (
                 <div className="flex flex-col gap-4">
                   <div className="flex items-center gap-5">
                     <div
@@ -658,18 +858,41 @@ export default function PortfolioPage() {
                 </div>
                 <div className="max-h-[22rem] overflow-y-auto">
                   <Table>
+                    {/* Item 6: Sortable headers for attribution */}
                     <TableHeader className="bg-card sticky top-0 z-10">
                       <TableRow>
                         <TableHead>名称</TableHead>
                         <TableHead>腿</TableHead>
-                        <TableHead className="text-right">贡献</TableHead>
-                        <TableHead className="text-right">自身</TableHead>
-                        <TableHead className="text-right">盈亏</TableHead>
+                        <TableHead
+                          className="cursor-pointer text-right select-none"
+                          aria-sort={attrSort.ariaSortFor("contrib")}
+                          onClick={() => attrSort.toggle("contrib")}
+                        >
+                          贡献
+                          <SortIcon dir={attrSort.dirFor("contrib")} />
+                        </TableHead>
+                        <TableHead
+                          className="cursor-pointer text-right select-none"
+                          aria-sort={attrSort.ariaSortFor("ret")}
+                          onClick={() => attrSort.toggle("ret")}
+                        >
+                          自身
+                          <SortIcon dir={attrSort.dirFor("ret")} />
+                        </TableHead>
+                        <TableHead
+                          className="cursor-pointer text-right select-none"
+                          aria-sort={attrSort.ariaSortFor("pnl")}
+                          onClick={() => attrSort.toggle("pnl")}
+                        >
+                          盈亏
+                          <SortIcon dir={attrSort.dirFor("pnl")} />
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {attr.holdings?.map((h) => (
+                      {sortedAttr.map((h) => (
                         <TableRow key={h.code}>
+                          {/* Item 10: font-mono for code, but name is shown not code */}
                           <TableCell className="font-medium">{h.name}</TableCell>
                           <TableCell>
                             <Badge variant={h.sleeve === "核心" ? "secondary" : "default"}>{h.sleeve}</Badge>
@@ -691,23 +914,45 @@ export default function PortfolioPage() {
               <CardHeader>
                 <CardTitle>因子体检</CardTitle>
                 <CardDescription>
-                  滚动 rank-IC：全程 vs 近 {fh.recent_months ?? 12} 月 · 季度看，持续衰减才调权重
+                  滚动 rank-IC
+                  <InfoTip content="每个月用因子排名和下月实际涨幅算相关系数（Spearman），衡量因子的预测能力。" />
+                  ：全程 vs 近 {fh.recent_months ?? 12} 月 · 季度看，持续衰减才调权重
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="max-h-[22rem] overflow-y-auto">
                   <Table>
+                    {/* Item 6: Sortable headers for factor health */}
                     <TableHeader className="bg-card sticky top-0 z-10">
                       <TableRow>
                         <TableHead>因子</TableHead>
                         <TableHead className="text-right">全程IC</TableHead>
-                        <TableHead className="text-right">近一年</TableHead>
-                        <TableHead className="text-right">衰减</TableHead>
-                        <TableHead className="text-right">IC_IR</TableHead>
+                        <TableHead
+                          className="cursor-pointer text-right select-none"
+                          aria-sort={fhSort.ariaSortFor("ic_recent")}
+                          onClick={() => fhSort.toggle("ic_recent")}
+                        >
+                          近一年
+                          <InfoTip content="近12个月的rank-IC均值；明显低于全程IC表示近期钝化。" />
+                          <SortIcon dir={fhSort.dirFor("ic_recent")} />
+                        </TableHead>
+                        <TableHead
+                          className="cursor-pointer text-right select-none"
+                          aria-sort={fhSort.ariaSortFor("decay")}
+                          onClick={() => fhSort.toggle("decay")}
+                        >
+                          衰减
+                          <InfoTip content="近一年IC - 全程IC；负值表示预测力下降，低于 -0.02 标记为衰减。" />
+                          <SortIcon dir={fhSort.dirFor("decay")} />
+                        </TableHead>
+                        <TableHead className="text-right">
+                          IC_IR
+                          <InfoTip content="IC均值 / IC标准差；衡量因子IC的稳定性，越高说明因子越稳定可靠。" />
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {fh.factors?.map((f) => (
+                      {sortedFh.map((f) => (
                         <TableRow key={f.factor}>
                           <TableCell className="font-medium">
                             {f.factor}
@@ -744,34 +989,35 @@ export default function PortfolioPage() {
             <CardContent>
               {trades.length ? (
                 <div className="max-h-[24rem] overflow-y-auto">
-                <Table>
-                  <TableHeader className="bg-card sticky top-0 z-10">
-                    <TableRow>
-                      <TableHead>日期</TableHead>
-                      <TableHead>方向</TableHead>
-                      <TableHead>代码</TableHead>
-                      <TableHead>名称</TableHead>
-                      <TableHead className="text-right">股数</TableHead>
-                      <TableHead className="text-right">成交价</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {trades.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="tabular-nums">{t.date?.slice(0, 10)}</TableCell>
-                        <TableCell>
-                          <Badge variant={t.action === "buy" ? "default" : "secondary"}>
-                            {t.action === "buy" ? "买" : "卖"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="tabular-nums">{t.code}</TableCell>
-                        <TableCell>{t.name}</TableCell>
-                        <TableCell className="text-right tabular-nums">{t.shares}</TableCell>
-                        <TableCell className="text-right tabular-nums">{t.price?.toFixed(2)}</TableCell>
+                  <Table>
+                    <TableHeader className="bg-card sticky top-0 z-10">
+                      <TableRow>
+                        <TableHead>日期</TableHead>
+                        <TableHead>方向</TableHead>
+                        <TableHead>代码</TableHead>
+                        <TableHead>名称</TableHead>
+                        <TableHead className="text-right">股数</TableHead>
+                        <TableHead className="text-right">成交价</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {trades.map((t) => (
+                        <TableRow key={t.id}>
+                          <TableCell className="tabular-nums">{t.date?.slice(0, 10)}</TableCell>
+                          <TableCell>
+                            <Badge variant={t.action === "buy" ? "default" : "secondary"}>
+                              {t.action === "buy" ? "买" : "卖"}
+                            </Badge>
+                          </TableCell>
+                          {/* Item 10: font-mono for stock codes */}
+                          <TableCell className="font-mono tabular-nums">{t.code}</TableCell>
+                          <TableCell>{t.name}</TableCell>
+                          <TableCell className="text-right tabular-nums">{t.shares}</TableCell>
+                          <TableCell className="text-right tabular-nums">{t.price?.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
               ) : (
                 <p className="text-muted-foreground py-6 text-center text-sm">还没有成交记录</p>
