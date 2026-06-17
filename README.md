@@ -24,7 +24,7 @@ python3 -m venv .venv
 
 ## 策略与入口
 
-四套并行，主力是第 1 套。
+三套并行，主力是第 1 套。
 
 ### 1) 主力：中证1000主板多因子（月中调仓）
 
@@ -70,7 +70,7 @@ cd web && npm run dev    # → http://localhost:3000
 - **月度调仓页**：填本金 / 持仓数 / AI 比例 →（刷新行情 → 生成清单）→ 指标卡 + 净值曲线 +
   本月下单清单（核心 / AI Badge）。
 - **实盘记账页**（`/portfolio`）：记真实成交 / 入金 → 当前持仓盈亏 + 实盘 vs 回测 vs 基准 +
-  跟踪误差。
+  跟踪误差 + 月度复盘（执行评分卡 / 归因 / 因子体检）。
 - 配色 A 股**红涨绿跌**。git worktree 开发时 venv 在主检出，用
   `QUANT_PYTHON=/绝对路径/.venv/bin/python npm run dev` 覆盖。
 
@@ -83,6 +83,8 @@ PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web add-trade \
     --date 2026-06-15 --code 600000 --action buy --shares 100 --price 10.5 --sleeve core
 PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web report     # 实盘绩效（JSON）
 PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web holdings   # 当前持仓盈亏（JSON）
+PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web review     # 月度复盘（执行评分卡 / 归因 / 因子体检）
+PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web factor-health  # 因子滚动 IC（季度看）
 ```
 
 只记真实成交（不是推荐清单），关键看**对回测的损耗（滑点 / 纪律）**和对基准的超额。

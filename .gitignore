@@ -8,3 +8,12 @@ src/quant_a.egg-info/
 data/
 orders/
 reports/
+
+# 密钥 / 环境 / 编辑器 / 缓存（预防误提交）
+.env
+.env.*
+*.log
+.idea/
+.vscode/
+.pytest_cache/
+.ruff_cache/
