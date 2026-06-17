@@ -145,6 +145,10 @@ def fetch_stock_bars(symbol: str, start: str | None = None) -> pd.DataFrame:
         )
         return _normalize_bars(bars)
     except requests.RequestException:
+        # 增量刷新(start 给定)时不要静默回退 yfinance 拉【全量】历史：yfinance 不认 start，
+        # 会下 2000+ 根、还可能口径不一致(把"刷新"拖成"重下")。让上层记 fail、下次再补。
+        if start is not None:
+            raise
         return _normalize_yfinance_bars(_download_with_yfinance(symbol, "stock"))
 
 

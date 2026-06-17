@@ -10,9 +10,15 @@ export function runPython<T = unknown>(
   const projectRoot = path.resolve(process.cwd(), "..");
   const python = process.env.QUANT_PYTHON || path.join(projectRoot, ".venv", "bin", "python");
   return new Promise((resolve) => {
+    const noProxy = ".eastmoney.com,push2his.eastmoney.com,.csindex.com.cn";
     const proc = spawn(python, args, {
       cwd: projectRoot,
-      env: { ...process.env, PYTHONPATH: "src" },
+      env: {
+        ...process.env,
+        PYTHONPATH: "src",
+        NO_PROXY: process.env.NO_PROXY ? `${process.env.NO_PROXY},${noProxy}` : noProxy,
+        no_proxy: process.env.no_proxy ? `${process.env.no_proxy},${noProxy}` : noProxy,
+      },
     });
     let out = "";
     let err = "";

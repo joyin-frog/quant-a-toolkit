@@ -11,9 +11,15 @@ export async function POST() {
   const python = process.env.QUANT_PYTHON || path.join(projectRoot, ".venv", "bin", "python");
 
   return new Promise<Response>((resolve) => {
+    const noProxy = ".eastmoney.com,push2his.eastmoney.com,.csindex.com.cn";
     const proc = spawn(python, ["-m", "quant_a.refresh_cs"], {
       cwd: projectRoot,
-      env: { ...process.env, PYTHONPATH: "src" },
+      env: {
+        ...process.env,
+        PYTHONPATH: "src",
+        NO_PROXY: process.env.NO_PROXY ? `${process.env.NO_PROXY},${noProxy}` : noProxy,
+        no_proxy: process.env.no_proxy ? `${process.env.no_proxy},${noProxy}` : noProxy,
+      },
     });
     let out = "";
     let err = "";

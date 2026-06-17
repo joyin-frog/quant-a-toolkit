@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -56,23 +56,35 @@ def _refresh_one(symbol: str) -> str:
     return "incr"
 
 
-def refresh(full: bool = False) -> dict[str, object]:
+def _refresh_full(symbol: str) -> str:
+    save_cached_bars(symbol, fetch_bars(symbol, "stock"))
+    return "full"
+
+
+def _pass(work, syms: list[str], workers: int) -> tuple[Counter, list[str]]:
+    """并行刷一批,返回(模式计数, 失败的代码)。每只各写自己的缓存文件,线程安全。"""
+    modes: Counter[str] = Counter()
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(work, s): s for s in syms}
+        for fut in as_completed(futures):
+            try:
+                modes[fut.result()] += 1
+            except Exception:  # noqa: BLE001
+                failed.append(futures[fut])
+    return modes, failed
+
+
+def refresh(full: bool = False, workers: int = 8) -> dict[str, object]:
     hs = pd.read_csv(DATA_DIR / "hs300_mainboard.csv", dtype=str)["symbol"].str.zfill(6).tolist()
     symbols = sorted(set(hs) | set(ai_symbols()))
-    modes: Counter[str] = Counter()
-    ok = fail = 0
-    for symbol in symbols:
-        try:
-            if full:
-                save_cached_bars(symbol, fetch_bars(symbol, "stock"))
-                modes["full"] += 1
-            else:
-                modes[_refresh_one(symbol)] += 1
-            ok += 1
-        except Exception:  # noqa: BLE001
-            fail += 1
-        time.sleep(0.03)
-    return {"ok": ok, "fail": fail, "modes": dict(modes), "total": len(symbols)}
+    work = _refresh_full if full else _refresh_one
+    # 纯网络 I/O -> 并行拉。第一遍高并发抢速度;失败的(多为 eastmoney 限流抖动)第二遍降并发补刷。
+    modes, failed = _pass(work, symbols, workers)
+    if failed:
+        modes2, failed = _pass(work, failed, max(2, workers // 3))
+        modes += modes2
+    return {"ok": len(symbols) - len(failed), "fail": len(failed), "modes": dict(modes), "total": len(symbols)}
 
 
 def main() -> None:
