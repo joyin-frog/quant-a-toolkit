@@ -66,7 +66,12 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def _pass(work, syms: list[str], workers: int) -> tuple[Counter, list[str]]:
+def _progress(done: int, total: int, fail: int, phase: str) -> None:
+    """机器可读进度行（网页进度条解析这行）；与上面的人类日志并存。"""
+    print(f'PROGRESS:{{"done": {done}, "total": {total}, "fail": {fail}, "phase": "{phase}"}}', file=sys.stderr, flush=True)
+
+
+def _pass(work, syms: list[str], workers: int, phase: str = "pull") -> tuple[Counter, list[str]]:
     """并行刷一批,返回(模式计数, 失败的代码)。每只各写自己的缓存文件,线程安全。"""
     modes: Counter[str] = Counter()
     failed: list[str] = []
@@ -79,7 +84,8 @@ def _pass(work, syms: list[str], workers: int) -> tuple[Counter, list[str]]:
                 modes[fut.result()] += 1
             except Exception:  # noqa: BLE001
                 failed.append(futures[fut])
-            if done % 50 == 0 or done == len(syms):
+            if done % 10 == 0 or done == len(syms):
+                _progress(done, len(syms), len(failed), phase)
                 _log(f"[refresh]   进度 {done}/{len(syms)}（失败 {len(failed)}）")
     return modes, failed
 
@@ -90,12 +96,12 @@ def refresh(full: bool = False, workers: int = 8) -> dict[str, object]:
     work = _refresh_full if full else _refresh_one
     _log(f"[refresh] 开始：{len(symbols)} 只 | workers={workers} | full={full}")
     # 纯网络 I/O -> 并行拉。第一遍高并发抢速度;失败的(多为 eastmoney 限流抖动)第二遍降并发补刷。
-    modes, failed = _pass(work, symbols, workers)
+    modes, failed = _pass(work, symbols, workers, phase="pull")
     _log(f"[refresh] 第一遍完成：ok={len(symbols) - len(failed)} fail={len(failed)}")
     if failed:
         w2 = max(2, workers // 3)
         _log(f"[refresh] 第二遍补刷 {len(failed)} 只（workers={w2}）…")
-        modes2, failed = _pass(work, failed, w2)
+        modes2, failed = _pass(work, failed, w2, phase="retry")
         modes += modes2
     result = {"ok": len(symbols) - len(failed), "fail": len(failed), "modes": dict(modes), "total": len(symbols)}
     _log(f"[refresh] 完成：{result}")

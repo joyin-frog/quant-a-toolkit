@@ -225,24 +225,49 @@ export default function Page() {
   const [aiWeight, setAiWeight] = useState(0.15);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; fail: number; phase: string } | null>(null);
   const [data, setData] = useState<Result | null>(null);
   const rebal = nextRebalance();
 
   async function refresh() {
     setRefreshing(true);
-    const t = toast.loading("刷新行情中…（约 1-2 分钟，终端可看进度）");
+    setProgress(null);
+    const t = toast.loading("刷新行情中…");
     try {
       const res = await fetch("/api/refresh", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "刷新失败");
+      if (!res.ok || !res.body) throw new Error("刷新启动失败");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let result: { ok: number; total: number; fail: number } | null = null;
+      let failMsg: string | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const evt = JSON.parse(line);
+          if (evt.type === "progress")
+            setProgress({ done: evt.done, total: evt.total, fail: evt.fail, phase: evt.phase });
+          else if (evt.type === "result") result = evt.result;
+          else if (evt.type === "error") failMsg = evt.error;
+        }
+      }
+      if (failMsg) throw new Error(failMsg);
+      if (!result) throw new Error("刷新未返回结果");
       toast.success(
-        `行情已更新：${json.ok}/${json.total} 只${json.fail ? `（${json.fail} 只失败，下次补）` : ""}`,
+        `行情已更新：${result.ok}/${result.total} 只${result.fail ? `（${result.fail} 只失败，下次补）` : ""}`,
         { id: t },
       );
     } catch (e) {
       toast.error((e as Error).message, { id: t });
     } finally {
       setRefreshing(false);
+      setProgress(null);
     }
   }
 
@@ -265,7 +290,7 @@ export default function Page() {
   }
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
+    <main className="mx-auto flex max-w-[1600px] flex-col gap-6 p-6">
       <Toaster position="top-center" />
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-1">
@@ -334,8 +359,27 @@ export default function Page() {
               ) : (
                 <RefreshCwIcon data-icon="inline-start" />
               )}
-              {refreshing ? "刷新中…" : "① 刷新行情"}
+              {refreshing
+                ? progress
+                  ? `${progress.phase === "retry" ? "补刷" : "拉取"} ${progress.done}/${progress.total}`
+                  : "刷新中…"
+                : "① 刷新行情"}
             </Button>
+            {refreshing && progress ? (
+              <div className="-mt-1 flex flex-col gap-1">
+                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+                  <div
+                    className="bg-primary h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round((progress.done / Math.max(progress.total, 1)) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-muted-foreground text-xs tabular-nums">
+                  {progress.phase === "retry" ? "补刷限流失败的 " : "拉取行情 "}
+                  {progress.done}/{progress.total}
+                  {progress.fail ? ` · 失败 ${progress.fail}` : ""}
+                </p>
+              </div>
+            ) : null}
             <Button onClick={run} disabled={loading || refreshing}>
               {loading ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" />}
               {loading ? "回测中…" : "② 生成清单"}

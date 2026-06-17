@@ -269,7 +269,7 @@ export default function PortfolioPage() {
   const fh = review?.factor_health;
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
+    <main className="mx-auto flex max-w-[1600px] flex-col gap-6 p-6">
       <Toaster position="top-center" />
       <header className="flex flex-col gap-1">
         <Link
@@ -409,8 +409,8 @@ export default function PortfolioPage() {
           </Card>
         </div>
 
-        <div className="flex flex-col gap-6">
-          <Card>
+        <div className="grid items-start gap-6 2xl:grid-cols-2">
+          <Card className="2xl:col-span-2">
             <CardHeader className="flex-row items-center justify-between">
               <div className="flex flex-col gap-1.5">
                 <CardTitle>当前持仓盈亏</CardTitle>
