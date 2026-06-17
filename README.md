@@ -24,12 +24,23 @@ python3 -m venv .venv
 
 ## 策略与入口
 
-三套并行，主力是第 1 套。
+三套并行。**主力 = 第 1 套沪深300核心-卫星**（网页、实盘记账、复盘都用它）；第 2 套中证1000多因子是命令行研究 / 对照；第 3 套是旧轮动。
 
-### 1) 主力：中证1000主板多因子（月中调仓）
+### 1) 主力（网页 / 实盘在用）：沪深300核心-卫星 + AI 卫星（月中调仓）
 
-5 因子：低波动 / 动量 / 价值 / 质量 各 0.21 + **股东人数（筹码集中）0.16**；20 万本金、
-100 股整手、买入前 30 名 / 跌出 45 名才卖的**缓冲带**。
+核心 ~85%（沪深300主板 **5 因子** + 行业上限，破解“全是银行”）+ AI 卫星 15%（8 条子链各选
+一只**买得起的**动量龙头）。5 因子 = 低波动 / 动量 / 价值 / 质量 各 0.21 + **股东人数（筹码集中）0.16**；
+20 万本金、100 股整手、买入前 30 名 / 跌出 45 名才卖的**缓冲带**。**网页「生成清单」调的就是它。**
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline
+```
+
+输出 `orders/cs_holdings.csv` + `reports/cs_equity.png`。
+
+### 2) 研究 / 对照：中证1000主板多因子（命令行）
+
+同样 5 因子，但选股池是**中证1000**全市场（`--mainboard` 可用全主板做去幸存者偏差对比）。项目早期的研究主力，现作对照。
 
 ```bash
 PYTHONPATH=src .venv/bin/python fetch_universe.py                      # 首次抓数（断点续抓）
@@ -39,17 +50,6 @@ PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline --mainboard --walkfor
 ```
 
 输出 `orders/factor_holdings.csv` + `reports/` 净值 / 回撤图。
-
-### 2) 核心-卫星：沪深300核心 + AI 产业链卫星
-
-核心 ~85%（沪深300主板 5 因子 + 行业上限，破解“全是银行”）+ AI 卫星 15%（8 条子链各选
-一只**买得起的**动量龙头）。
-
-```bash
-PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline
-```
-
-输出 `orders/cs_holdings.csv` + `reports/cs_equity.png`。
 
 ### 3) 旧沪深300周频轮动（历史入口）
 

@@ -41,7 +41,7 @@ PYTHONPATH=src .venv/bin/python main.py
 PYTHONPATH=src .venv/bin/python -c "from quant_a.main import run_pipeline; print(run_pipeline(engine='vectorized')['metrics']); print(run_pipeline(engine='backtrader')['metrics'])"
 ```
 
-### 主力策略：多因子组合（中证1000主板，月度调仓）
+### 中证1000主板多因子（月度调仓）——研究 / 对照线（非网页实盘所用）
 **5 因子**（低波动/动量/价值/质量各 0.21 + 股东人数 0.16，见 `config.FACTOR_WEIGHTS`）。
 前 4 个摊开抗"单因子失效"；第 5 个【股东人数/筹码集中】是 A 股散户市真信号（户数减少=机构吸筹），
 实测小权重加入能提升全程夏普、近三年不降（`fundamentals.load_holder_factor`，按公告日对齐，`fetch_holders.py` 抓数）。
@@ -71,7 +71,7 @@ PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline --mainboard --walkfor
 > 幸存者偏差：默认中证1000池用的是【当前】成分股回溯，偏乐观；`--mainboard` 用全主板个股 +
 > trade_rules 点对点流动性筛选，消除了"指数成分股选择"这层偏差（残留：已退市个股不在内）。
 
-### 核心-卫星组合（沪深300分散核心 + AI产业链龙头卫星）
+### 核心-卫星组合（沪深300核心 + AI产业链龙头卫星）——主力（网页 / 实盘记账 / 复盘都用它）
 大盘股版本 + 用户的 AI 信仰仓。核心=沪深300主板4因子（含缓冲带 + 行业上限，避免"全是银行"扎堆）；
 卫星≈15%=AI产业链（光通信/半导体/消费电子/算力/PCB/铜箔/电子布/电力）每条子链选 1 只【买得起的】动量龙头。
 ```bash
@@ -101,12 +101,12 @@ cd web && npm run dev    # → http://localhost:3000
 - 关键指标：实盘总收益、对基准超额、**对回测损耗（执行滑点/纪律）**、跟踪误差——实盘最该盯后两个。
 - ⚠️ 只记真实成交（不是推荐清单）；跑前数据要刷新到成交覆盖的日期。
 
-> 另有并行的研究/对照入口：`quant_a.factor_pipeline`（中证1000主板4因子，主力）、`quant_a.main`（旧沪深300周频轮动）。
+> 主力（网页/实盘实际跑的）是上面的核心-卫星 `quant_a.cs_pipeline`（沪深300）。另有并行入口：`quant_a.factor_pipeline`（中证1000主板5因子，研究/对照）、`quant_a.main`（旧沪深300周频轮动）。
 
 ## 架构
 
 核心逻辑都在 `src/quant_a`。最初是最小化的沪深300 / ETF 轮动脚手架（`main.py` 入口），现已长出多套并行策略
-（主力多因子 `factor_pipeline`、核心卫星 `cs_pipeline`）+ 网页前端（`web/`）+ SQLite
+（主力核心卫星 `cs_pipeline`、研究线多因子 `factor_pipeline`）+ 网页前端（`web/`）+ SQLite
 实盘记账（`portfolio_db` / `portfolio_web`）。下面的“主流程”特指旧的 `main.py` 轮动入口：
 
 主流程在 `src/quant_a/main.py`：
@@ -129,11 +129,11 @@ cd web && npm run dev    # → http://localhost:3000
 - `metrics.py`：绩效指标
 - `orders.py`：交易清单
 - `plotting.py`：净值、回撤、持仓图
-- **主力策略（低波动多因子）**：
+- **中证1000多因子线（研究 / 对照）**：
   - `universe.py`：中证1000成分股 + 排除创业板/科创板/北交所
   - `factor_strategy.py`：低波动+动量打分与选股（纯函数）
   - `factor_backtest.py`：固定本金 + 100股整手的真实回测 + 下单清单生成
-  - `factor_pipeline.py`：主力策略总控入口（回测/指标/基准对比/下单清单/报告图）
+  - `factor_pipeline.py`：中证1000多因子总控入口（回测/指标/基准对比/下单清单/报告图）
   - `trade_rules.py`：合格股票过滤（流动性/ST/停牌/上市天数）
 - **核心-卫星 + 网页 + 实盘记账**：
   - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测
@@ -149,7 +149,7 @@ cd web && npm run dev    # → http://localhost:3000
 - live 抓数失败但本地有缓存时，会继续使用缓存；只有“无缓存且抓数失败”才报错
 - 当前因子分析基于策略真实使用的打分：`momentum.where(eligible)`
 - 输出目录固定为：`data/`、`orders/`、`reports/`
-- 现在有多套并行策略（主力 `factor_pipeline`、核心卫星 `cs_pipeline`、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
+- 现在有多套并行策略（主力 `cs_pipeline` 核心卫星(沪深300)、研究线 `factor_pipeline` 中证1000、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
 
 ## 当前限制
 
