@@ -1,7 +1,7 @@
-"""网页后端 JSON 入口：跑核心-卫星策略，把结果以 JSON 打到 stdout，供前端消费。
+"""【兼容入口】核心-卫星网页 JSON CLI，已委托给统一入口 quant_a.strategy_web。
 
-用法：python -m quant_a.cs_web --capital 200000 --holdings 17 --ai_weight 0.15
-前端的 API 路由会以子进程方式调它、解析 stdout 的 JSON。
+网页前端现在直接调 strategy_web（多策略）；本模块只保留旧命令行用法：
+    python -m quant_a.cs_web --capital 200000 --holdings 17 --ai_weight 0.15
 """
 
 from __future__ import annotations
@@ -9,56 +9,12 @@ from __future__ import annotations
 import argparse
 import json
 
-import numpy as np
-import pandas as pd
-
-from quant_a.cs_pipeline import run_cs_pipeline
-
-
-def _num(x) -> float | None:
-    """NaN/Inf → None（JS 的 JSON.parse 不认 NaN，必须清洗）。"""
-    try:
-        v = float(x)
-    except (TypeError, ValueError):
-        return None
-    return round(v, 4) if np.isfinite(v) else None
-
-
-def _sample_curve(curve: pd.Series, max_points: int = 240) -> list[dict[str, object]]:
-    # 下采样到约月频，控制 JSON 体积。
-    monthly = curve.resample("ME").last().dropna()
-    if len(monthly) > max_points:
-        step = len(monthly) // max_points + 1
-        monthly = monthly.iloc[::step]
-    return [{"date": d.strftime("%Y-%m"), "value": _num(v)} for d, v in monthly.items()]
+from quant_a.strategy_web import build_payload as _strategy_payload
+from quant_a.webjson import clean_number as _num  # noqa: F401  # 兼容旧引用（测试/脚本用过 cs_web._num）
 
 
 def build_payload(capital: float, holdings: int, ai_weight: float) -> dict[str, object]:
-    result = run_cs_pipeline(capital=capital, core_holdings=holdings, ai_weight=ai_weight)
-    start, end = result["date_range"]
-    buy_list = result["buy_list"]
-    equity = result["equity_curve"]
-    bench = result["benchmark_curve"]
-    bench_aligned = bench.reindex(equity.index).ffill()
-
-    e_pts = _sample_curve(equity)
-    b_pts = {p["date"]: p["value"] for p in _sample_curve(bench_aligned)}
-    curve = [{"date": p["date"], "strategy": p["value"], "benchmark": b_pts.get(p["date"])} for p in e_pts]
-
-    return {
-        "params": {"capital": capital, "holdings": holdings, "ai_weight": ai_weight},
-        "as_of": end.strftime("%Y-%m-%d"),
-        "range": f"{start:%Y-%m-%d} ~ {end:%Y-%m-%d}",
-        "metrics": {k: _num(v) for k, v in result["metrics"].items()},
-        "benchmark": {k: _num(v) for k, v in result["benchmark_metrics"].items()},
-        "rolling12m": {k: _num(v) for k, v in result["rolling12m"].items()},
-        "core_sectors": result["core_sectors"],
-        "avg_cash_pct": _num(result["avg_cash_pct"]),
-        "invested": float(buy_list.attrs.get("invested", 0)),
-        "cash_left": float(buy_list.attrs.get("cash_left", 0)),
-        "holdings_list": buy_list.to_dict(orient="records"),
-        "curve": curve,
-    }
+    return _strategy_payload("core_satellite", capital=capital, holdings=holdings, ai_weight=ai_weight)
 
 
 def main() -> None:

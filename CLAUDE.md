@@ -1,160 +1,95 @@
 # CLAUDE.md
 
-本文件用于说明这个仓库的常用命令、主流程和关键约束。
+## UIUX前端设计
+参考 app/globals.css，最好围绕token设计
 
-## 常用命令
 
-### 初始化
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-```
+## 复杂任务处理
 
-### 运行
-```bash
-PYTHONPATH=src .venv/bin/python main.py
-```
+主循环只做协调（Orchestrator）：理解需求、编写计划、定成功标准、调度子代理、汇总结果
+subagent 使用sonnet执行实施代码
 
-如果 AkShare / Eastmoney 受系统代理影响，改用：
-```bash
-NO_PROXY=".eastmoney.com,push2his.eastmoney.com" no_proxy=".eastmoney.com,push2his.eastmoney.com" PYTHONPATH=src .venv/bin/python main.py
-```
+## 一、先读，再写
 
-### 依赖变更后重装
-```bash
-.venv/bin/pip install -e .
-```
+模型生成的劣质代码，最大的来源就是还没读懂代码库便开始动手。
 
-### 测试
-单元测试用 pytest（离线、纯逻辑：绩效指标 / 因子选股含缓冲带 / JSON 的 NaN-Inf 清洗 / 实盘净值重建）：
-```bash
-.venv/bin/pip install -e ".[dev]"   # 首次装测试依赖（pytest）
-.venv/bin/python -m pytest           # 跑全部（当前 13 个，全绿）
-```
-端到端 / 抓数路径没有单测，仍用主流程烟测（需要数据 / 网络）：
-```bash
-PYTHONPATH=src .venv/bin/python main.py
-```
+阅读你即将修改的文件——是真正地读，而不是略看。复制项目中已有的模式，检查相关导入，确认项目实际依赖了什么，这样你才不会去寻找那些本来就存在的解决方案。
 
-对比两套回测引擎：
-```bash
-PYTHONPATH=src .venv/bin/python -c "from quant_a.main import run_pipeline; print(run_pipeline(engine='vectorized')['metrics']); print(run_pipeline(engine='backtrader')['metrics'])"
-```
+找不到某种既有模式时，应该询问，而不是猜测。
 
-### 中证1000主板多因子（月度调仓）——研究 / 对照线（非网页实盘所用）
-**5 因子**（低波动/动量/价值/质量各 0.21 + 股东人数 0.16，见 `config.FACTOR_WEIGHTS`）。
-前 4 个摊开抗"单因子失效"；第 5 个【股东人数/筹码集中】是 A 股散户市真信号（户数减少=机构吸筹），
-实测小权重加入能提升全程夏普、近三年不降（`fundamentals.load_holder_factor`，按公告日对齐，`fetch_holders.py` 抓数）。
-调仓默认**月中 15 号**（`config.REBALANCE_DAY`，实测哪天调差别是噪声）。流水线会自动输出**滚动12月收益**分布。
-`factor_scores_on(sector_map=)` 支持**行业中性化**（行业内排名，需 `data/industry_map.csv`，东财行业接口不稳时缺失）。先抓数再跑：
-```bash
-# 1) 抓中证1000主板个股日线（约649只，首次约10-20分钟，断点续抓）
-NO_PROXY=".eastmoney.com,push2his.eastmoney.com,.csindex.com.cn" no_proxy=".eastmoney.com,push2his.eastmoney.com,.csindex.com.cn" PYTHONPATH=src .venv/bin/python fetch_universe.py
+## 二、复制之前，先思考
 
-# 2) 跑回测 + 输出"本月该买哪30只"的下单清单（20万本金、100股整手）
-PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline
+在敲代码之前，先弄清楚自己到底要做什么。
 
-# 滚动验证（逐年是否稳定赢基准）：
-PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline --walkforward
+明确写出你的假设，例如：“添加身份验证”可能有五种不同含义，要说明你选择了哪一种，并指出相应的取舍。
 
-# 去幸存者偏差版（用全主板 ~3200 只点对点选股，需先抓全主板）：
-PYTHONPATH=src .venv/bin/python fetch_mainboard.py            # 大抓数，约 40-50 分钟，断点续抓
-PYTHONPATH=src .venv/bin/python -m quant_a.factor_pipeline --mainboard --walkforward
-```
-本金/持仓数可调：`run_factor_pipeline(capital=200_000, holdings=30, universe="mainboard", walkforward=True)`（20万的甜区是 25-30 只）。
-下单清单存到 `orders/factor_holdings.csv`，净值/回撤图存到 `reports/`。
+如果确实有不清楚的地方，就停下来询问。不要用一段看似可信的代码填补空白——这种代码往往能通过随手审查，却会在真正关键时出问题。
 
-**卖出缓冲带**（`config.FACTOR_SELL_RANK=45`）：买入要进前 30 名，但已持有的票要掉到 45 名外才卖
-（滞后/无交易区），避免在边界反复换手、卖飞刚要回血的票。实测换手减半、近三年夏普 0.54→0.75。
-实操含义：每月别因为某只持仓掉到 31-45 名就卖，掉出 45 名才换掉。
+## 三、保持简单
 
-> 幸存者偏差：默认中证1000池用的是【当前】成分股回溯，偏乐观；`--mainboard` 用全主板个股 +
-> trade_rules 点对点流动性筛选，消除了"指数成分股选择"这层偏差（残留：已退市个股不在内）。
+只编写能够解决眼前问题的最少代码，不要编写试图解决未来所有可能问题的最少代码。
 
-### 核心-卫星组合（沪深300核心 + AI产业链龙头卫星）——主力（网页 / 实盘记账 / 复盘都用它）
-大盘股版本 + 用户的 AI 信仰仓。核心=沪深300主板4因子（含缓冲带 + 行业上限，避免"全是银行"扎堆）；
-卫星≈15%=AI产业链（光通信/半导体/消费电子/算力/PCB/铜箔/电子布/电力）每条子链选 1 只【买得起的】动量龙头。
-```bash
-PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline   # 输出 orders/cs_holdings.csv + reports/cs_equity.png
-```
-- 模块：`portfolio.py`（AI龙头池 + 行业上限 + 核心/卫星选股 + 整手回测 + 下单清单）、`cs_pipeline.py`（总控）。
-- 参数：`config.CS_CORE_HOLDINGS=17`、`CORE_MAX_PER_SECTOR=3`、`AI_SATELLITE_WEIGHT=0.15`。
-- 数据：`data/hs300_mainboard.csv`（沪深300主板清单）；行业分类 `data/industry_map.csv` 可选（缺失时只卡金融三类）。
-- ⚠️ AI卫星是【信仰仓/主动赌注】：AI龙头池按当下认知选、回测含幸存者偏差，实盘会打折；20万下贵龙头（北方华创/韦尔）买不起，故只选买得起的。
-- ⚠️ 每月跑前最好先刷新全部成分股数据到同一天，否则结尾日期参差会让清单的AI覆盖不全。
+抵制过早抽象；不要为不可能发生的错误编写处理逻辑；在确实需要配置之前，可以先把值直接写清楚。
 
-### 网页前端（shadcn / Next.js）
-`web/` 是一个 Next.js + shadcn/ui 前端：填本金/持仓数/AI比例 → 一键生成本月调仓清单 + 指标卡片 + 净值图。
-```bash
-cd web && npm install   # 首次
-cd web && npm run dev    # → http://localhost:3000
-```
-- 原理：前端 `app/api/run/route.ts`（Node API 路由）以子进程调 `quant_a.cs_web`（输出 JSON），无需另开后端服务，一个 `npm run dev` 即可。
-- Python 解释器默认用 `项目根/.venv`（主检出即对）；在 git worktree 里开发时 venv 在主检出，需 `QUANT_PYTHON=/绝对/路径/.venv/bin/python npm run dev` 覆盖。
-- `cs_web.py` 是网页用的 JSON 入口（`run_cs_pipeline` 的薄封装）。
+判断是否过度设计有一个简单标准：如果某个抽象存在的唯一理由是“以后可能会用到”，那你已经做过头了。
 
-#### 实盘记账与绩效
-网页 `/portfolio` 页（顶部链接进入）：记【真实成交】+ 入金 → 自动重建实盘净值 → 对比回测/基准 + 跟踪误差。
-- 存储：`portfolio_db.py`（SQLite `data/portfolio.db`，`trades` + `cash_flows` 两表；持仓/净值全从成交推导）。
-- 报告：`portfolio_web.py`（CLI 子命令 `add-trade`/`add-cash`/`list`/`report`，输出 JSON）；`report` 会跑一次策略回测对齐到实盘窗口算跟踪误差/损耗。
-- 网页 API：`/api/trades`（GET列/POST增）、`/api/portfolio`（GET绩效）；前端 `app/portfolio/page.tsx`。
-- 关键指标：实盘总收益、对基准超额、**对回测损耗（执行滑点/纪律）**、跟踪误差——实盘最该盯后两个。
-- ⚠️ 只记真实成交（不是推荐清单）；跑前数据要刷新到成交覆盖的日期。
+## 四、只做必要的手术式修改
 
-> 主力（网页/实盘实际跑的）是上面的核心-卫星 `quant_a.cs_pipeline`（沪深300）。另有并行入口：`quant_a.factor_pipeline`（中证1000主板5因子，研究/对照）、`quant_a.main`（旧沪深300周频轮动）。
+代码差异应当与任务允许的范围一样小。
 
-## 架构
+不要修改未被要求改动的内容。保持现有风格，不要顺手重新格式化；一次格式化可能把真正重要的三行改动埋进三百行无关差异中。
 
-核心逻辑都在 `src/quant_a`。最初是最小化的沪深300 / ETF 轮动脚手架（`main.py` 入口），现已长出多套并行策略
-（主力核心卫星 `cs_pipeline`、研究线多因子 `factor_pipeline`）+ 网页前端（`web/`）+ SQLite
-实盘记账（`portfolio_db` / `portfolio_web`）。下面的“主流程”特指旧的 `main.py` 轮动入口：
+检验标准是：你能否说明每一处改动都由当前任务直接要求？如果某一行只是因为“我既然已经改到这里了”，那就撤销它。
 
-主流程在 `src/quant_a/main.py`：
-1. 刷新行情缓存
-2. 对齐收盘价矩阵
-3. 跑因子分析
-4. 生成目标权重
-5. 执行回测
-6. 计算指标
-7. 输出订单和图表
+## 五、验证
 
-## 模块边界
+“能运行的代码”与你“以为能运行的代码”之间，差的就是测试。
 
-- `config.py`：统一配置，含股票池、回测引擎、参数和输出目录
-- `data_fetch.py`：AkShare 抓数，含代理绕过和重试
-- `cache.py` / `cleaning.py`：本地 CSV 缓存与价格对齐
-- `strategy.py`：旧策略打分和目标权重（沪深300周频轮动）
-- `factor_analysis.py`：Alphalens 因子分析
-- `backtest.py`：回测执行，支持 `vectorized` 和 `backtrader`
-- `metrics.py`：绩效指标
-- `orders.py`：交易清单
-- `plotting.py`：净值、回撤、持仓图
-- **中证1000多因子线（研究 / 对照）**：
-  - `universe.py`：中证1000成分股 + 排除创业板/科创板/北交所
-  - `factor_strategy.py`：低波动+动量打分与选股（纯函数）
-  - `factor_backtest.py`：固定本金 + 100股整手的真实回测 + 下单清单生成
-  - `factor_pipeline.py`：中证1000多因子总控入口（回测/指标/基准对比/下单清单/报告图）
-  - `trade_rules.py`：合格股票过滤（流动性/ST/停牌/上市天数）
-- **核心-卫星 + 网页 + 实盘记账**：
-  - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测
-  - `cs_pipeline.py` / `cs_web.py`：核心卫星总控 / 网页用 JSON 入口
-  - `fundamentals.py`：价值/质量/股东人数因子（按报告期 + 滞后对齐）
-  - `walkforward.py`：逐年 / 滚动验证；`refresh_cs.py`：增量刷新行情缓存
-  - `portfolio_db.py` / `portfolio_web.py`：SQLite 实盘记账 / 绩效 CLI（add-trade / report / holdings…）
-- 测试：`tests/`（pytest，纯逻辑离线单测）
+修复缺陷时，先写出会失败的测试，亲眼确认它确实失败；然后修复问题，再确认它通过。应修复根因，而不是修补表象。
 
-## 关键约束
+测试真正可能出错的行为，而不是只测试某个构造函数是否设置了字段。如果某段代码很难测试，这反映的是设计问题，而不是可以跳过测试的理由。
 
-- 默认回测引擎来自 `config.py` 的 `BACKTEST_ENGINE`，也可用 `run_pipeline(engine=...)` 临时覆盖
-- live 抓数失败但本地有缓存时，会继续使用缓存；只有“无缓存且抓数失败”才报错
-- 当前因子分析基于策略真实使用的打分：`momentum.where(eligible)`
-- 输出目录固定为：`data/`、`orders/`、`reports/`
-- 现在有多套并行策略（主力 `cs_pipeline` 核心卫星(沪深300)、研究线 `factor_pipeline` 中证1000、旧轮动 `main.py`）；新逻辑放到对应模块，别再堆进根目录 `main.py`
+## 六、以目标驱动执行
 
-## 当前限制
+每项任务在编写代码之前，都必须有明确的成功标准。
 
-- 已有 pytest 单元测试（`tests/`，纯逻辑 / 离线），但覆盖仍局部；抓数 / 回测端到端仍靠主流程烟测
-- 暂无 lint / format / CI 配置
-- 行情抓取依赖 AkShare / Eastmoney 可用性
-- 两套回测引擎执行细节不同，指标有差异是正常的
-- 股票池较小时，Alphalens 可能只返回 warning，分析价值有限
+“增加校验”可以具体化为：“拒绝缺失或格式错误的电子邮件，返回 400 状态码并给出清晰提示，同时测试成功与失败两种情况。”
+
+对于包含多个步骤的任务，先说明计划，让用户能在你花费一小时构建错误方案之前及时发现方向问题。
+
+## 七、调试
+
+出问题时，应当调查，而不是猜测。
+
+完整阅读错误信息和堆栈跟踪；在修改任何内容之前，先复现问题；然后每次只改一处。
+
+不要看到意外的空值就加一个空值判断来掩盖问题。应当找出它为什么为空——否则缺陷只会转移到一个更隐蔽的位置。
+
+## 八、依赖管理
+
+每一个依赖，都是一段你无法控制的永久代码。
+
+添加依赖之前，先确认项目自身或标准库能否实现同样的功能。不要为了避免编写一个微小函数，就引入 `crypto-randomUUID` 之类的包。
+
+确实需要添加依赖时，要说明原因，让这个选择在清单文件中清晰可见，而不是偷偷混进去。
+
+## 九、沟通
+
+说明你做了什么，以及为什么这么做，而不是只丢下一段代码。
+
+即使你严格完成了要求，也要指出值得关注的问题；同时要准确表达不确定性。
+
+“我不确定这个库是否支持流式处理”能告诉用户需要验证什么；“我觉得应该能用”则不能。
+
+## 十、常见失败模式
+
+下面几种模式频繁出现，值得专门命名：
+
+- **厨房水槽（Kitchen Sink）**：重构了半个代码库，而实际只要求增加一个条件判断。
+- **错误抽象（Wrong Abstraction）**：复制粘贴两次后，还没弄清规律就急着抽象。
+- **乐观路径（Optimistic Path）**：只处理正常路径，忽略 500 错误等异常情况。
+- **失控重构（Runaway Refactor）**：一个修复不断扩散，最终波及多个文件。
+
+一旦发现自己落入其中任何一种模式，正确做法都是停下来，而不是硬着头皮继续推进。
+
+---

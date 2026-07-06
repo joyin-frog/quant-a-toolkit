@@ -125,3 +125,38 @@ PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web factor-health  # 因子
 ## 架构与完整命令
 
 模块边界、参数（`config.py`）、行业中性化、增量刷新等细节见 [CLAUDE.md](CLAUDE.md)。
+## 多策略统一入口（正式 3 条线）
+
+正式策略只保留 3 条线，通过注册表统一运行，结果按策略隔离到 `reports/<strategy_id>/`：
+
+| 策略 | id | 定位 | 全程回测（2018-2026，20万整手） |
+|---|---|---|---|
+| **低波长线（沪深300核心）** | `core_satellite` | 主力：5因子低波主导+缓冲带+行业上限（银行/证券/保险子行业归并后卡上限），月度调仓 | 年化 +14.9% / 回撤 -19.1% / 夏普 0.81（基准 0.46） |
+| **AI+机器人主板龙头** | `ai_leader` | 信仰仓：AI算力 20 链 + 机器人链，每链 1 只买得起的动量龙头 | 年化 +34.7% / 回撤 -39.2% / 夏普 1.19（基准 1.12）⚠️ 幸存者偏差重，超额≈主题beta |
+| **活跃龙头** | `active_leader` | 研究/对照：博主口诀形式化，**回测未验证盈利**（年化 -17.8%） | 仅作纪律参考，勿实盘 |
+
+中证1000多因子退出注册表，研究线保留 CLI：`python -m quant_a.factor_pipeline [--mainboard --walkforward]`。
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --list          # 加 --json 输出参数/仓位分层元数据
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy core_satellite --capital 200000 --holdings 17
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy ai_leader --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy active_leader --universe csi1000 --capital 200000
+```
+
+### 迁移调仓与锁仓（从现有持仓出发，不是从零开始）
+
+`--account` 指定记账账户（如 `manual`=真实券商账户），清单从该账户**现有个股持仓**出发给出
+卖出/保留/买入 过渡方案；`--locked` 锁仓的票策略**不卖**（哪怕它想卖），占持仓名额、计入行业上限：
+
+```bash
+# 手动账户 → 6只低波长线组合，但锁住中航沈飞不卖
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy core_satellite --holdings 6 --account manual --locked 600760
+```
+
+- ETF/场内基金不参与迁移（自行管理），会在警告中披露；
+- 保留的票不加不减（最小化换手），卖出全清，新买按等权预算整手；
+- 网页主页选策略后可切"从账户迁移"+ 填锁仓代码，出同样的迁移清单卡片；
+- 你不照做没关系：实际成交记进账户后，绩效报告的"对回测损耗"会如实反映差异——锁仓/抗命的代价用数据说话。
+
+统一结果包含净值、基准、指标、交易记录、当前持仓、诊断信息和数据限制。每个策略在注册表里声明自己的参数和仓位分层，CLI 与网页表单都由该声明驱动。`ai_leader` 池子（`strategies/ai_leader/pool.py`）人工圈定、只保留主板（无创业板/科创板权限），含幸存者偏差，属信仰仓口径。

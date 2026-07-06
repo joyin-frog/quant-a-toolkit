@@ -42,3 +42,34 @@ def test_reconstruct_in_range_trade_still_snaps_forward(monkeypatch, tmp_path):
     rc = db.reconstruct()
     held = {h["code"]: h["shares"] for h in rc["current_holdings"]}
     assert held.get("600000") == 100
+
+
+def test_strategy_accounts_isolate_trades_cash_and_positions(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    db.add_cash_flow("2024-01-02", 100_000, strategy_id="core_satellite")
+    db.add_cash_flow("2024-01-02", 50_000, strategy_id="active_leader")
+    db.add_trade("2024-01-05", "600000", "X", "buy", 100, 10.0, strategy_id="core_satellite")
+    db.add_trade("2024-01-05", "600000", "X", "buy", 300, 10.0, strategy_id="active_leader")
+
+    assert len(db.get_trades("core_satellite")) == 1
+    assert len(db.get_trades("active_leader")) == 1
+    assert db.get_cash_flows("core_satellite")["amount"].sum() == 100_000
+    assert db.get_cash_flows("active_leader")["amount"].sum() == 50_000
+    assert db.current_positions("core_satellite").iloc[0]["shares"] == 100
+    assert db.current_positions("active_leader").iloc[0]["shares"] == 300
+
+
+def test_report_twr_ignores_mid_period_deposits(monkeypatch, tmp_path):
+    """中途入金不能被算成收益：价格不动时 TWR 应恒为 0（缓存价固定 10 元）。"""
+    _setup(monkeypatch, tmp_path)
+    db.add_cash_flow("2024-01-02", 1000, strategy_id="s")
+    db.add_trade("2024-01-02", "600000", "X", "buy", 100, 10.0, strategy_id="s")
+    db.add_cash_flow("2024-01-15", 1000, strategy_id="s")  # 中途入金，价格没动
+
+    rc = db.reconstruct("s")
+    equity = rc["equity"]
+    external = rc["external_flows"].reindex(equity.index).fillna(0.0)
+    prev = equity.shift(1)
+    real_ret = ((equity - external) / prev - 1.0).where(prev > 0, 0.0).fillna(0.0)
+    assert abs(real_ret).max() < 1e-9  # 价格没动 → 收益应为 0，入金不是收益
+    assert float(external.sum()) == 2000.0

@@ -22,7 +22,7 @@ from quant_a.config import (
     ORDERS_DIR,
     REPORTS_DIR,
 )
-from quant_a.factor_backtest import build_buy_list, rebalance_dates, run_factor_backtest
+from quant_a.factor_backtest import build_buy_list, run_factor_backtest
 from quant_a.factor_strategy import compute_factor_panel, select_holdings_on
 from quant_a.fundamentals import load_fundamental_factors, load_holder_factor
 from quant_a.metrics import calculate_metrics
@@ -32,50 +32,26 @@ from quant_a.walkforward import per_year_table, rolling_return_summary, summariz
 
 
 def _benchmark_returns(close_matrix: pd.DataFrame, candidate_mask: pd.DataFrame) -> pd.Series:
-    # 公平基准 = 月度等权持有【全部合格股】（同样月调、但不选股）。
-    # 策略相对它的超额 = 纯粹的"选股"能力。月调让赢家在月内复利，口径与策略一致。
-    # 个别脏价格(0→正)会让 pct_change 出 inf、cumprod 炸成无穷，先把 inf 收益清成 0（与 cs_pipeline 一致）。
-    daily = close_matrix.pct_change(fill_method=None).replace([float("inf"), float("-inf")], 0.0)
-    rebal = rebalance_dates(close_matrix.index)
-    weights = pd.DataFrame(0.0, index=close_matrix.index, columns=close_matrix.columns)
-    for date in rebal:
-        eligible = candidate_mask.loc[date]
-        names = eligible[eligible].index
-        if len(names) > 0:
-            weights.loc[date, names] = 1.0 / len(names)
-    held = weights.loc[rebal].reindex(close_matrix.index).ffill().fillna(0.0)
-    return (held.shift(1) * daily).sum(axis=1).fillna(0.0)
+    # 公平基准 = 月度等权持有【全部合格股】，实现下沉到 benchmarks.py（三条策略线共用）。
+    from quant_a.benchmarks import monthly_equal_weight_returns
 
-
-def _setup_cjk_font() -> None:
-    import matplotlib
-    import matplotlib.font_manager as fm
-
-    for font in ["Heiti TC", "Songti SC", "Arial Unicode MS", "PingFang SC", "STHeiti"]:
-        if any(font in name.name for name in fm.fontManager.ttflist):
-            matplotlib.rcParams["font.sans-serif"] = [font]
-            break
-    matplotlib.rcParams["axes.unicode_minus"] = False
+    return monthly_equal_weight_returns(close_matrix, candidate_mask)
 
 
 def _save_charts(equity_curve: pd.Series, benchmark_curve: pd.Series) -> dict[str, Path]:
+    from quant_a.plotting import save_equity_vs_benchmark, setup_cjk_font
+
+    equity_path = save_equity_vs_benchmark(
+        equity_curve, benchmark_curve, REPORTS_DIR / "factor_equity.png",
+        "低波动多因子 vs 基准（20万本金，整手）",
+        strategy_label="低波动多因子策略", benchmark_label="等权买入持有基准",
+    )
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    _setup_cjk_font()
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(equity_curve.index, equity_curve.values, color="#1f77b4", lw=1.8, label="低波动多因子策略")
-    ax.plot(benchmark_curve.index, benchmark_curve.values, color="black", lw=1.2, label="等权买入持有基准")
-    ax.axhline(1.0, color="gray", ls=":", lw=0.8)
-    ax.set_title("低波动多因子 vs 基准（20万本金，整手）")
-    ax.set_ylabel("净值"); ax.grid(alpha=0.3); ax.legend()
-    fig.tight_layout()
-    equity_path = REPORTS_DIR / "factor_equity.png"
-    fig.savefig(equity_path, dpi=150); plt.close(fig)
-
+    setup_cjk_font()
     drawdown = equity_curve / equity_curve.cummax() - 1.0
     fig, ax = plt.subplots(figsize=(12, 4.5))
     ax.fill_between(drawdown.index, drawdown.values, 0, color="salmon", alpha=0.4)
@@ -145,6 +121,8 @@ def run_factor_pipeline(
         "buy_list": buy_list,
         "order_path": order_path,
         "charts": charts,
+        "equity_curve": backtest["equity_curve"],
+        "benchmark_curve": benchmark_curve,
     }
 
     if walkforward:
