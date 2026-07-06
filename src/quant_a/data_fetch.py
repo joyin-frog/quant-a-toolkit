@@ -176,7 +176,25 @@ def fetch_stock_metadata(symbol: str) -> dict[str, object]:
 
 
 # 统一抓数入口；当前版本只保留 A 股个股。start 给定时只抓该日期起的增量。
+def fetch_etf_bars(symbol: str, start: str | None = None) -> pd.DataFrame:
+    """场内 ETF 日线（东财口径，qfq 前复权——份额拆分/分红后历史价自动折算）。"""
+    end_date = END_DATE or date.today().strftime("%Y-%m-%d")
+    start_date = (start or START_DATE).replace("-", "")
+    bars = _fetch_with_retry(
+        lambda: ak.fund_etf_hist_em(
+            symbol=symbol,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date.replace("-", ""),
+            adjust=ADJUST,
+        )
+    )
+    return _normalize_bars(bars)
+
+
 def fetch_bars(symbol: str, kind: str, start: str | None = None) -> pd.DataFrame:
     if kind == "stock":
         return fetch_stock_bars(symbol, start=start)
+    if kind == "etf":
+        return fetch_etf_bars(symbol, start=start)
     raise ValueError(f"Unsupported instrument type for {symbol}: {kind}")

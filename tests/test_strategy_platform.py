@@ -61,8 +61,8 @@ def test_real_registry_declares_params_and_sleeves():
 
     registry = build_registry()
     ids = [item.strategy_id for item in registry.list()]
-    assert ids == ["active_leader", "ai_leader", "core_satellite", "multi_factor"]
+    assert ids == ["active_leader", "ai_leader", "core_satellite"]  # 3条线：活跃龙头/AI+机器人/低波长线
     meta = registry.get("core_satellite").metadata()
-    assert {p["name"] for p in meta["params"]} == {"capital", "holdings", "ai_weight"}
+    assert {p["name"] for p in meta["params"]} == {"capital", "holdings", "account", "locked"}
     assert [s.value for s in registry.get("active_leader").sleeves] == ["long", "tactical"]
-    assert registry.get("ai_leader").param_names() == {"capital"}
+    assert registry.get("ai_leader").param_names() == {"capital", "account", "locked"}

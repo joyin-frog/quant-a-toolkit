@@ -14,6 +14,28 @@ from quant_a.runner import build_registry
 from quant_a.walkforward import rolling_return_summary
 from quant_a.webjson import clean_number, monthly_curve
 
+# 只记账、不可回测的账户（实盘记账页可切换；主页"生成清单"不显示）。
+LEDGER_ACCOUNTS: list[dict[str, object]] = [
+    {
+        "strategy_id": "manual",
+        "name": "手动实盘",
+        "description": "真实券商账户（录屏导入 + 日常记账）",
+        "params": [],
+        "sleeves": [{"value": "自选", "label": "自选"}],
+        "runnable": False,
+        "cadence": {"kind": "none"},
+    },
+    {
+        "strategy_id": "ai_paper",
+        "name": "AI纸面跟踪",
+        "description": "AI+机器人策略的模拟盘（虚拟资金，按月记录清单执行）",
+        "params": [],
+        "sleeves": [{"value": "AI", "label": "AI龙头"}],
+        "runnable": False,
+        "cadence": {"kind": "monthly", "day": 15},
+    },
+]
+
 
 def _holdings(result, capital: float) -> list[dict[str, object]]:
     rows = []
@@ -62,6 +84,11 @@ def build_payload(strategy_id: str, **candidates) -> dict[str, object]:
         "holdings_list": rows,
         "curve": monthly_curve(result.equity_curve, result.benchmark_curve),
         "warnings": result.warnings,
+        # 迁移模式（account 参数）下：从账户现有持仓到目标组合的 卖出/保留/买入 过渡清单
+        "transition": (
+            {"summary": result.diagnostics["transition"], "orders": result.diagnostics.get("transition_orders", [])}
+            if "transition" in result.diagnostics else None
+        ),
     }
 
 
@@ -71,18 +98,21 @@ def main() -> None:
     parser.add_argument("--strategy", default="core_satellite")
     parser.add_argument("--capital", type=float, default=None)
     parser.add_argument("--holdings", type=int, default=None)
-    parser.add_argument("--ai_weight", type=float, default=None)
     parser.add_argument("--universe", default=None)
+    parser.add_argument("--account", default=None)
+    parser.add_argument("--locked", default=None)
     args = parser.parse_args()
     if args.list:
-        print(json.dumps([item.metadata() for item in build_registry().list()], ensure_ascii=False))
+        entries = [{**item.metadata(), "runnable": True} for item in build_registry().list()]
+        print(json.dumps(entries + LEDGER_ACCOUNTS, ensure_ascii=False))
         return
     payload = build_payload(
         args.strategy,
         capital=args.capital,
         holdings=args.holdings,
-        ai_weight=args.ai_weight,
         universe=args.universe,
+        account=args.account,
+        locked=args.locked,
     )
     print(json.dumps(payload, ensure_ascii=False, default=str))
 

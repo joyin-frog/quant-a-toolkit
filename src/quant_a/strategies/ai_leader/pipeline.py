@@ -23,12 +23,12 @@ from quant_a.strategies.ai_leader.pool import mainboard_chains
 from quant_a.trade_rules import build_trade_eligibility
 
 
-def run_ai_leader(capital: float = 200_000) -> StrategyResult:
+def run_ai_leader(capital: float = 200_000, account: str = "", locked: str = "") -> StrategyResult:
     if capital <= 0:
         raise ValueError("capital must be positive")
     chains, names, dropped = mainboard_chains()
     warnings: list[str] = [
-        "AI产业链池按图片人工圈定（2026-07），回测含幸存者偏差，属信仰仓口径。",
+        "AI产业链+机器人池按当下认知人工圈定（2026-07），回测含幸存者偏差，属信仰仓口径。",
         f"账户无创业板/科创板权限：剔除 {len(dropped)} 只非主板/存疑标的：{'、'.join(dropped)}。",
     ]
 
@@ -104,8 +104,8 @@ def run_ai_leader(capital: float = 200_000) -> StrategyResult:
         backtest["equity_curve"],
         benchmark_curve,
         REPORTS_DIR / "ai_leader" / "equity.png",
-        "主板AI产业链龙头 vs 股票池等权基准",
-        strategy_label="AI链龙头",
+        "AI+机器人主板龙头 vs 股票池等权基准",
+        strategy_label="AI+机器人龙头",
         benchmark_label="股票池等权基准",
     )
 
@@ -113,10 +113,22 @@ def run_ai_leader(capital: float = 200_000) -> StrategyResult:
     if uncovered:
         warnings.append(f"最新调仓日子链 {'、'.join(uncovered)} 无合格/买得起的标的，留现金。")
 
+    diagnostics_extra: dict[str, object] = {}
+    if account:
+        from quant_a.transition import build_transition
+
+        locked_codes = [c.strip().zfill(6) for c in locked.split(",") if c.strip()]
+        target = list(leaders.values()) + [c for c in locked_codes if c not in leaders.values()]
+        transition = build_transition(account, target, names, locked=locked_codes)
+        transition["summary"]["as_of"] = f"{latest:%Y-%m-%d}"
+        diagnostics_extra["transition"] = transition["summary"]
+        diagnostics_extra["transition_orders"] = transition["orders"].to_dict(orient="records")
+        warnings.extend(transition["summary"]["warnings"])
+
     return StrategyResult(
         strategy_id="ai_leader",
-        name="主板AI产业链龙头",
-        params={"capital": capital},
+        name="AI+机器人主板龙头",
+        params={"capital": capital, **({"account": account} if account else {}), **({"locked": locked} if locked else {})},
         date_range=(close.index.min(), latest),
         metrics=metrics,
         benchmark_metrics=benchmark_metrics,
@@ -131,5 +143,6 @@ def run_ai_leader(capital: float = 200_000) -> StrategyResult:
             "chains_covered_latest": len(leaders),
             "leaders_latest": {chain: f"{names[code]}({code})" for chain, code in leaders.items()},
             "avg_cash_pct": float((backtest["cash"] / backtest["equity_value"]).mean()),
+            **diagnostics_extra,
         },
     )

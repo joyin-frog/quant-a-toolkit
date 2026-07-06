@@ -64,6 +64,19 @@ def add_cash_flow(date, amount, flow_type="deposit", note="", strategy_id=DEFAUL
         return int(cur.lastrowid)
 
 
+def delete_trade(trade_id: int, strategy_id: str = DEFAULT_STRATEGY_ID) -> int:
+    """删除一笔成交（记错了删掉重录）。返回删除行数（0=没找到/不属于该账户）。"""
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM trades WHERE id = ? AND strategy_id = ?", (int(trade_id), strategy_id))
+        return int(cur.rowcount)
+
+
+def delete_cash_flow(flow_id: int, strategy_id: str = DEFAULT_STRATEGY_ID) -> int:
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM cash_flows WHERE id = ? AND strategy_id = ?", (int(flow_id), strategy_id))
+        return int(cur.rowcount)
+
+
 def get_trades(strategy_id: str = DEFAULT_STRATEGY_ID) -> pd.DataFrame:
     with _conn() as conn:
         df = pd.read_sql_query(
@@ -150,6 +163,7 @@ def reconstruct(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object] | N
 
     deltas = pd.DataFrame(0.0, index=index, columns=codes)
     cash_delta = pd.Series(0.0, index=index)
+    external = pd.Series(0.0, index=index)  # 仅出入金（分红/税费是投资收益，不算外部资金）
     for _, t in trades.iterrows():
         d = _first_on_or_after(index, t["date"])
         if d is None:
@@ -159,8 +173,12 @@ def reconstruct(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object] | N
         cash_delta.loc[d] += -(t["shares"] * t["price"] + t["fee"]) if sign > 0 else (t["shares"] * t["price"] - t["fee"])
     for _, f in flows.iterrows():
         d = _first_on_or_after(index, f["date"])
-        if d is not None:
-            cash_delta.loc[d] += f["amount"] if f["type"] != "withdraw" else -f["amount"]
+        if d is None:
+            continue
+        signed = f["amount"] if f["type"] != "withdraw" else -f["amount"]
+        cash_delta.loc[d] += signed
+        if f["type"] in ("deposit", "withdraw"):
+            external.loc[d] += signed
 
     holdings = deltas.cumsum()
     cash = cash_delta.cumsum()
@@ -178,6 +196,7 @@ def reconstruct(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object] | N
         "equity": equity,
         "cash": cash,
         "holdings_value": holdings_value,
+        "external_flows": external,
         "current_holdings": current_holdings,
         "index": index,
     }

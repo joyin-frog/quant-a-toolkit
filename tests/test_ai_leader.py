@@ -22,8 +22,8 @@ def test_mainboard_pool_excludes_gem_star_and_unknown():
 
 
 def test_pool_covers_all_image_chains():
-    # 图片共 20 条子链，全部收录（过滤前）
-    assert len(CHAIN_POOL) == 20
+    # 图片 20 条子链 + 用户新增机器人链 = 21（过滤前全收录）
+    assert len(CHAIN_POOL) == 21
     assert all(len(entries) >= 4 for entries in CHAIN_POOL.values())
 
 

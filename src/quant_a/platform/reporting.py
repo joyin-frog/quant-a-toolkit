@@ -43,6 +43,23 @@ def save_strategy_result(result: StrategyResult) -> Path:
     return summary_path
 
 
+def load_cached_holdings(strategy_id: str, max_age_hours: float = 24) -> pd.DataFrame | None:
+    """读最近一次 save_strategy_result 的目标持仓清单（当日内有效），供复盘对照用。"""
+    base = REPORTS_DIR / strategy_id
+    candidates = ([base] + [p for p in base.glob("*/") if p.is_dir()]) if base.exists() else []
+    best: Path | None = None
+    for folder in candidates:
+        path = folder / "holdings.csv"
+        if path.exists() and (best is None or path.stat().st_mtime > best.stat().st_mtime):
+            best = path
+    if best is None or time.time() - best.stat().st_mtime > max_age_hours * 3600:
+        return None
+    try:
+        return pd.read_csv(best, dtype={"code": str, "symbol": str})
+    except (OSError, ValueError):
+        return None
+
+
 def load_cached_curves(strategy_id: str, max_age_hours: float = 24) -> dict[str, object] | None:
     """读取最近一次 save_strategy_result 的净值/基准曲线（含 universe 子目录），过期返回 None。
 

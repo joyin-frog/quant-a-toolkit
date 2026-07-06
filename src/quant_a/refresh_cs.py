@@ -24,17 +24,22 @@ from quant_a.data_fetch import fetch_bars
 from quant_a.portfolio import ai_symbols
 
 
+def _kind(symbol: str) -> str:
+    """按代码段路由抓数通道：5/1 开头是场内基金（ETF），其余按股票（实盘账户里有 ETF 持仓）。"""
+    return "etf" if symbol and symbol[0] in "15" else "stock"
+
+
 def _refresh_one(symbol: str) -> str:
     if not cache_exists(symbol):
-        save_cached_bars(symbol, fetch_bars(symbol, "stock"))
+        save_cached_bars(symbol, fetch_bars(symbol, _kind(symbol)))
         return "full"
     cached = load_cached_bars(symbol).sort_values("date")
     if cached.empty:
-        save_cached_bars(symbol, fetch_bars(symbol, "stock"))
+        save_cached_bars(symbol, fetch_bars(symbol, _kind(symbol)))
         return "full"
 
     last = cached["date"].max()
-    new = fetch_bars(symbol, "stock", start=last.strftime("%Y%m%d"))
+    new = fetch_bars(symbol, _kind(symbol), start=last.strftime("%Y%m%d"))
     if new.empty:
         return "current"
     new = new.sort_values("date")
@@ -45,7 +50,7 @@ def _refresh_one(symbol: str) -> str:
     if not overlap.empty and not cached_close.empty:
         base = float(cached_close.iloc[0])
         if abs(float(overlap["close"].iloc[0]) - base) > max(0.01, 0.003 * base):
-            save_cached_bars(symbol, fetch_bars(symbol, "stock"))
+            save_cached_bars(symbol, fetch_bars(symbol, _kind(symbol)))
             return "rebased"
 
     add = new[new["date"] > last]
@@ -57,7 +62,7 @@ def _refresh_one(symbol: str) -> str:
 
 
 def _refresh_full(symbol: str) -> str:
-    save_cached_bars(symbol, fetch_bars(symbol, "stock"))
+    save_cached_bars(symbol, fetch_bars(symbol, _kind(symbol)))
     return "full"
 
 
@@ -91,8 +96,28 @@ def _pass(work, syms: list[str], workers: int, phase: str = "pull") -> tuple[Cou
 
 
 def refresh(full: bool = False, workers: int = 8) -> dict[str, object]:
+    """刷新范围 = 沪深300主板 ∪ 旧AI卫星池 ∪ AI+机器人策略池 ∪ 各记账账户当前持仓（含ETF）。"""
     hs = pd.read_csv(DATA_DIR / "hs300_mainboard.csv", dtype=str)["symbol"].str.zfill(6).tolist()
-    symbols = sorted(set(hs) | set(ai_symbols()))
+    symbols = set(hs) | set(ai_symbols())
+    try:
+        from quant_a.strategies.ai_leader.pool import mainboard_chains
+
+        chains, _, _ = mainboard_chains()
+        symbols |= {code for codes in chains.values() for code in codes}
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # 记账账户持仓（manual/纸面等）也要有最新价，否则持仓盈亏/净值失真
+        import sqlite3
+
+        from quant_a.portfolio_db import DB_PATH
+
+        if DB_PATH.exists():
+            with sqlite3.connect(DB_PATH) as conn:
+                held = {str(r[0]).zfill(6) for r in conn.execute("SELECT DISTINCT code FROM trades")}
+            symbols |= held
+    except Exception:  # noqa: BLE001
+        pass
+    symbols = sorted(symbols)
     work = _refresh_full if full else _refresh_one
     _log(f"[refresh] 开始：{len(symbols)} 只 | workers={workers} | full={full}")
     # 纯网络 I/O -> 并行拉。第一遍高并发抢速度;失败的(多为 eastmoney 限流抖动)第二遍降并发补刷。

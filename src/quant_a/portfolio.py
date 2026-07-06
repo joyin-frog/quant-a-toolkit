@@ -57,10 +57,20 @@ def ai_symbols() -> list[str]:
 
 
 def industry_label(symbol: str, names: dict[str, str], industry_map: dict[str, str] | None = None) -> str:
-    """行业标签。industry_map 优先；否则名称兜底识别金融三类；其余按自身代码（不限制）。"""
+    """行业标签。industry_map 优先；否则名称兜底识别金融三类；其余按自身代码（不限制）。
+
+    东财把银行拆成 城商行/国有大行/股份行 等子行业——按子行业各卡上限会让"防银行扎堆"
+    被架空（每个子行业都能塞满）。金融三类归并成大桶后再卡上限。
+    """
     if industry_map:
         label = industry_map.get(symbol)
         if isinstance(label, str) and label:
+            if "银行" in label or "商行" in label:  # 城商行Ⅲ/农商行 不含"银行"二字
+                return "银行"
+            if "证券" in label:
+                return "证券"
+            if "保险" in label:
+                return "保险"
             return label
     name = names.get(symbol, "")
     if "银行" in name:
@@ -118,12 +128,18 @@ def select_core(
     sell_rank: int | None = None,
     industry_map: dict[str, str] | None = None,
     weights: dict[str, float] | None = None,
+    locked: list[str] | None = None,
 ) -> list[str]:
-    """核心选股：多因子排名 + 缓冲带 + 行业上限，只在 core_universe 里、排除 exclude（已在卫星里的票）。"""
+    """核心选股：多因子排名 + 缓冲带 + 行业上限，只在 core_universe 里、排除 exclude（已在卫星里的票）。
+
+    locked = 用户锁仓的票：无条件保留（哪怕不合格/排名垫底），占持仓名额、计入行业上限——
+    策略"绕开"用户的主观持仓配置剩余仓位，回测/清单的口径由此保持一致。
+    """
     cap = max_per_sector or CORE_MAX_PER_SECTOR
     sell = sell_rank or FACTOR_SELL_RANK
     exclude = exclude or set()
     current_holdings = current_holdings or []
+    locked = [s for s in (locked or []) if s not in exclude]
     scored = factor_scores_on(date, panel, candidate_mask, weights or FACTOR_WEIGHTS)
     scored = scored[[s in core_universe and s not in exclude for s in scored.index]]
     position = {s: i + 1 for i, s in enumerate(scored.index)}
@@ -131,15 +147,20 @@ def select_core(
     sector_count: dict[str, int] = {}
     chosen: list[str] = []
 
-    def try_add(symbol: str) -> None:
+    def try_add(symbol: str, force: bool = False) -> None:
         sector = industry_label(symbol, names, industry_map)
-        if len(chosen) < holdings and sector_count.get(sector, 0) < cap:
+        if force or (len(chosen) < holdings and sector_count.get(sector, 0) < cap):
             chosen.append(symbol)
             sector_count[sector] = sector_count.get(sector, 0) + 1
 
+    # 0) 锁仓票无条件进（不检查合格性/排名；仍计入行业计数，避免锁仓+选股在同行业扎堆）
+    for symbol in locked:
+        if symbol not in chosen and len(chosen) < holdings:
+            try_add(symbol, force=True)
     # 1) 缓冲：已持有且排名仍在前 sell_rank 内的，优先保留（受行业上限约束）
     for symbol in sorted([h for h in current_holdings if position.get(h, 10**9) <= sell], key=lambda s: position[s]):
-        try_add(symbol)
+        if symbol not in chosen:
+            try_add(symbol)
     # 2) 按排名补满，受行业上限约束
     for symbol in scored.index:
         if len(chosen) >= holdings:

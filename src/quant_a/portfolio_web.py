@@ -119,10 +119,13 @@ def _report(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object]:
     positive = equity[equity > 0]
     if positive.empty:
         return {"empty": True}
-    base = float(positive.iloc[0])
-    nav = equity / base
-    nav = nav.loc[positive.index[0]:]
-    real_ret = nav.pct_change(fill_method=None).fillna(0.0)
+    # 时间加权收益（TWR）：当日收益 =(当日净资产 - 当日出入金)/前一日净资产 - 1。
+    # 中途入金只扩大规模、不算收益；否则多笔入金会被误报成暴涨。
+    equity = equity.loc[positive.index[0]:]
+    external = rc["external_flows"].reindex(equity.index).fillna(0.0)
+    prev = equity.shift(1)
+    real_ret = ((equity - external) / prev - 1.0).where(prev > 0, 0.0).fillna(0.0)
+    nav = (1.0 + real_ret).cumprod()
     window = nav.index
 
     out: dict[str, object] = {
@@ -131,6 +134,8 @@ def _report(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object]:
         "as_of": window[-1].strftime("%Y-%m-%d"),
         "days": int(len(window)),
         "equity_yuan": round(float(equity.loc[window[-1]]), 0),
+        "net_deposits": round(float(external.sum()), 0),
+        "pnl_yuan": round(float(equity.loc[window[-1]] - external.sum()), 0),
         "real_metrics": _round_metrics(real_ret, nav),
         "current_holdings": rc["current_holdings"],
         "n_trades": int(len(get_trades(strategy_id))),
@@ -184,6 +189,75 @@ def _report(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object]:
     return out
 
 
+def _add_batch(strategy_id: str, payload: dict) -> dict[str, object]:
+    """批量记账（一键按清单入账）。payload = {"trades": [...], "flows": [...]}。"""
+    n_trades = 0
+    for t in payload.get("trades", []):
+        add_trade(
+            t["date"], t["code"], t.get("name", ""), t["action"], t["shares"], t["price"],
+            fee=float(t.get("fee", 0) or 0), sleeve=t.get("sleeve", ""), note=t.get("note", ""),
+            strategy_id=strategy_id,
+        )
+        n_trades += 1
+    n_flows = 0
+    for f in payload.get("flows", []):
+        add_cash_flow(f["date"], f["amount"], f.get("type", "deposit"), f.get("note", ""), strategy_id=strategy_id)
+        n_flows += 1
+    return {"ok": True, "trades": n_trades, "flows": n_flows}
+
+
+# 账户 → 对照策略：复盘"该买什么 vs 实际持有什么"时用哪张目标清单
+REVIEW_TARGET = {"core_satellite": "core_satellite", "ai_paper": "ai_leader", "manual": "core_satellite"}
+
+
+def _review_lite(account: str, target_sid: str | None = None) -> dict[str, object]:
+    """通用执行复盘：账户当前持仓 vs 对照策略的目标清单 → 遵从率 + 该买没买 + 计划外持仓。
+
+    比 core_satellite 的完整归因轻：不算收益贡献，只看组合构成的偏离——够回答
+    "我是在执行策略，还是在自由发挥"。
+    """
+    import pandas as pd
+
+    target_sid = target_sid or REVIEW_TARGET.get(account, "core_satellite")
+    from quant_a.platform.reporting import load_cached_holdings, save_strategy_result
+
+    holdings_df = load_cached_holdings(target_sid)
+    if holdings_df is None:
+        from quant_a.runner import build_registry
+
+        res = build_registry().run(target_sid)
+        save_strategy_result(res)
+        holdings_df = res.holdings
+    code_col = "code" if "code" in holdings_df.columns else "symbol"
+    target_names = dict(zip(holdings_df[code_col].astype(str).str.zfill(6), holdings_df.get("name", "").astype(str)))
+    target = list(target_names)
+
+    positions = current_positions(account)
+    held_names: dict[str, str] = {}
+    if not positions.empty:
+        for _, p in positions.iterrows():
+            code = str(p["code"]).zfill(6)
+            if code.startswith(("60", "00")):  # 只比个股；ETF 不在策略清单口径内
+                held_names[code] = str(p.get("name", ""))
+    held = list(held_names)
+
+    matched = [c for c in held if c in target]
+    missing = [c for c in target if c not in held]
+    extra = [c for c in held if c not in target]
+    return {
+        "account": account,
+        "target_strategy": target_sid,
+        "n_target": len(target),
+        "n_held_stocks": len(held),
+        "n_matched": len(matched),
+        "compliance": _num(len(matched) / len(target)) if target else None,
+        "matched": [{"code": c, "name": target_names.get(c, held_names.get(c, ""))} for c in matched],
+        "missing": [{"code": c, "name": target_names.get(c, "")} for c in missing],
+        "extra": [{"code": c, "name": held_names.get(c, "")} for c in extra],
+        "note": "遵从率 = 持有的目标股 / 目标清单数；ETF 与现金不参与该口径。",
+    }
+
+
 def _review(rebalance_date: str | None = None) -> dict[str, object]:
     from quant_a.review import _load_context, attribution, execution_scorecard, factor_health
 
@@ -230,6 +304,17 @@ def main() -> None:
     h.add_argument("--refresh", action="store_true")
     h.add_argument("--strategy", default=DEFAULT_STRATEGY_ID)
     sub.add_parser("next-rebalance")
+    ab = sub.add_parser("add-batch")
+    ab.add_argument("--strategy", required=True)
+    dt = sub.add_parser("del-trade")
+    dt.add_argument("--id", type=int, required=True)
+    dt.add_argument("--strategy", required=True)
+    dc = sub.add_parser("del-cash")
+    dc.add_argument("--id", type=int, required=True)
+    dc.add_argument("--strategy", required=True)
+    rl = sub.add_parser("review-lite")
+    rl.add_argument("--strategy", required=True, help="记账账户 id")
+    rl.add_argument("--target", default=None, help="对照策略 id（默认按账户映射）")
     rv = sub.add_parser("review")
     rv.add_argument("--date", default=None)
     rv.add_argument("--strategy", default=DEFAULT_STRATEGY_ID)
@@ -251,6 +336,23 @@ def main() -> None:
         print(json.dumps(_holdings(refresh=args.refresh, strategy_id=args.strategy), ensure_ascii=False, default=str))
     elif args.cmd == "next-rebalance":
         print(json.dumps(_next_rebalance(), ensure_ascii=False))
+    elif args.cmd == "add-batch":
+        import sys as _sys
+
+        payload = json.loads(_sys.stdin.read() or "{}")
+        print(json.dumps(_add_batch(args.strategy, payload), ensure_ascii=False))
+    elif args.cmd == "del-trade":
+        from quant_a.portfolio_db import delete_trade
+
+        n = delete_trade(args.id, strategy_id=args.strategy)
+        print(json.dumps({"ok": n > 0, "deleted": n}))
+    elif args.cmd == "del-cash":
+        from quant_a.portfolio_db import delete_cash_flow
+
+        n = delete_cash_flow(args.id, strategy_id=args.strategy)
+        print(json.dumps({"ok": n > 0, "deleted": n}))
+    elif args.cmd == "review-lite":
+        print(json.dumps(_review_lite(args.strategy, args.target), ensure_ascii=False, default=str))
     elif args.cmd == "review":
         # 复盘归因绑定核心-卫星的选股上下文；别的策略账户直接调会把 cs 的归因错安到它头上。
         if args.strategy != "core_satellite":

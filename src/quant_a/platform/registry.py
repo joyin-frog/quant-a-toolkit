@@ -16,6 +16,9 @@ class StrategyDefinition:
     runner: StrategyRunner
     params: tuple[ParamSpec, ...] = ()
     sleeves: tuple[SleeveSpec, ...] = ()
+    # 调仓节奏：{"kind": "monthly", "day": 15} / {"kind": "daily_signal"} / {"kind": "none"}
+    # 前端的"距下次调仓"提醒按它显示——月度型倒计时、信号型提示按日执行、记账账户不显示。
+    cadence: dict[str, Any] | None = None
 
     def param_names(self) -> set[str]:
         return {spec.name for spec in self.params}
@@ -28,6 +31,7 @@ class StrategyDefinition:
             "description": self.description,
             "params": [spec.to_dict() for spec in self.params],
             "sleeves": [spec.to_dict() for spec in self.sleeves],
+            "cadence": self.cadence or {"kind": "monthly", "day": 15},
         }
 
 
