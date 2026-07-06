@@ -26,10 +26,10 @@ NO_PROXY=".eastmoney.com,push2his.eastmoney.com" no_proxy=".eastmoney.com,push2h
 ```
 
 ### 测试
-单元测试用 pytest（离线、纯逻辑：绩效指标 / 因子选股含缓冲带 / JSON 的 NaN-Inf 清洗 / 实盘净值重建）：
+单元测试用 pytest（离线、纯逻辑：绩效指标 / 因子选股含缓冲带 / JSON 的 NaN-Inf 清洗 / 实盘净值重建 / 策略注册表参数契约 / active_leader 引擎 / ai_leader 股票池过滤）：
 ```bash
 .venv/bin/pip install -e ".[dev]"   # 首次装测试依赖（pytest）
-.venv/bin/python -m pytest           # 跑全部（当前 13 个，全绿）
+.venv/bin/python -m pytest           # 跑全部（当前 30 个，全绿）
 ```
 端到端 / 抓数路径没有单测，仍用主流程烟测（需要数据 / 网络）：
 ```bash
@@ -89,14 +89,15 @@ PYTHONPATH=src .venv/bin/python -m quant_a.cs_pipeline   # 输出 orders/cs_hold
 cd web && npm install   # 首次
 cd web && npm run dev    # → http://localhost:3000
 ```
-- 原理：前端 `app/api/run/route.ts`（Node API 路由）以子进程调 `quant_a.cs_web`（输出 JSON），无需另开后端服务，一个 `npm run dev` 即可。
+- 原理：前端 `app/api/run/route.ts`（Node API 路由）以子进程调 `quant_a.strategy_web`（统一多策略 JSON 入口），无需另开后端服务，一个 `npm run dev` 即可。
+- 策略清单/参数表单/仓位分层都来自 `/api/strategies`（调 `strategy_web --list`，读后端注册表元数据）；**新增策略零前端改动**。
 - Python 解释器默认用 `项目根/.venv`（主检出即对）；在 git worktree 里开发时 venv 在主检出，需 `QUANT_PYTHON=/绝对/路径/.venv/bin/python npm run dev` 覆盖。
-- `cs_web.py` 是网页用的 JSON 入口（`run_cs_pipeline` 的薄封装）。
+- `cs_web.py` 仅保留 CLI 兼容，内部已委托 `strategy_web`。
 
 #### 实盘记账与绩效
 网页 `/portfolio` 页（顶部链接进入）：记【真实成交】+ 入金 → 自动重建实盘净值 → 对比回测/基准 + 跟踪误差。
 - 存储：`portfolio_db.py`（SQLite `data/portfolio.db`，`trades` + `cash_flows` 两表；持仓/净值全从成交推导）。
-- 报告：`portfolio_web.py`（CLI 子命令 `add-trade`/`add-cash`/`list`/`report`，输出 JSON）；`report` 会跑一次策略回测对齐到实盘窗口算跟踪误差/损耗。
+- 报告：`portfolio_web.py`（CLI 子命令 `add-trade`/`add-cash`/`list`/`report`，均带 `--strategy`，输出 JSON）；`report` 用策略回测对齐到实盘窗口算跟踪误差/损耗，同一天内复用 `reports/` 下的回测产物（不会每次请求重跑）；对比参数会在 `compare_params` 字段回显（默认参数≠你的实盘本金/池子，损耗仅供参考）。`review` 只支持 core_satellite，其他策略返回 error。
 - 网页 API：`/api/trades`（GET列/POST增）、`/api/portfolio`（GET绩效）；前端 `app/portfolio/page.tsx`。
 - 关键指标：实盘总收益、对基准超额、**对回测损耗（执行滑点/纪律）**、跟踪误差——实盘最该盯后两个。
 - ⚠️ 只记真实成交（不是推荐清单）；跑前数据要刷新到成交覆盖的日期。
@@ -104,6 +105,28 @@ cd web && npm run dev    # → http://localhost:3000
 > 主力（网页/实盘实际跑的）是上面的核心-卫星 `quant_a.cs_pipeline`（沪深300）。另有并行入口：`quant_a.factor_pipeline`（中证1000主板5因子，研究/对照）、`quant_a.main`（旧沪深300周频轮动）。
 
 ## 架构
+
+### 多策略统一入口
+
+`quant_a.runner` 是策略发现、切换与单独回测的统一入口：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --list          # 加 --json 输出参数/仓位分层元数据
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy active_leader --universe csi1000 --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy core_satellite --capital 200000 --holdings 17 --ai_weight 0.15
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy multi_factor --universe csi1000 --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy ai_leader --capital 200000
+```
+
+- `platform/contracts.py`：统一 `StrategyResult`（净值、基准、指标、交易、持仓、产物、警告）+ `ParamSpec`/`SleeveSpec`（策略参数与仓位分层的声明）。
+- `platform/registry.py`：策略注册、按 `strategy_id` 切换、**参数契约校验**（传了策略没声明的参数会报人话错误，如 core_satellite 不吃 `--universe`）。
+- `platform/adapters.py`：现有核心卫星、多因子 pipeline 的兼容适配，不重写旧算法。
+- `platform/reporting.py`：结果隔离到 `reports/<strategy_id>/`（带 `universe` 参数的策略再分 `reports/<strategy_id>/<universe>/`）；`load_cached_curves` 供绩效报告复用当天产物。
+- `strategies/active_leader/`：图片“活跃龙头”全部口诀的形式化实现；独立状态型回测，底仓和机动仓分开记账，信号次日开盘执行。csi1000 全量回测约 6 秒。
+- `strategies/ai_leader/`：**主板 AI 产业链龙头**（图片“AI算力全产业链细分龙头”20 条子链，账户无创业板/科创板权限 → 只保留主板 60/00，AI芯片链整链无主板标的）。每条子链选 1 只买得起的动量龙头、按子链数分预算（缺链留现金）、月度调仓整手回测；池子人工圈定、含幸存者偏差，属信仰仓口径。跑前建议把池子行情刷新到同一天（结尾参差时清单基准日会自动截到覆盖率≥80%的最后一天并给警告）。
+- 共享层：`benchmarks.py`（等权基准，月调/日调两种口径）、`plotting.save_equity_vs_benchmark`（中文净值对比图）、`webjson.py`（NaN/Inf 清洗 + 月频曲线）。
+
+`active_leader` 默认池为中证1000，也支持 `--universe mainboard` 全主板；全主板宽表特征占用内存较高、运行更慢。不同股票池结果分别写入 `reports/active_leader/<universe>/`，不会互相覆盖。
 
 核心逻辑都在 `src/quant_a`。最初是最小化的沪深300 / ETF 轮动脚手架（`main.py` 入口），现已长出多套并行策略
 （主力核心卫星 `cs_pipeline`、研究线多因子 `factor_pipeline`）+ 网页前端（`web/`）+ SQLite
@@ -136,11 +159,16 @@ cd web && npm run dev    # → http://localhost:3000
   - `factor_pipeline.py`：中证1000多因子总控入口（回测/指标/基准对比/下单清单/报告图）
   - `trade_rules.py`：合格股票过滤（流动性/ST/停牌/上市天数）
 - **核心-卫星 + 网页 + 实盘记账**：
-  - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测
-  - `cs_pipeline.py` / `cs_web.py`：核心卫星总控 / 网页用 JSON 入口
+  - `portfolio.py`：AI 龙头池 + 行业上限 + 核心/卫星选股 + 整手回测（`chains`/`n_chains` 参数供 ai_leader 复用）
+  - `cs_pipeline.py`：核心卫星总控；`cs_web.py` 仅 CLI 兼容（委托 `strategy_web`）
   - `fundamentals.py`：价值/质量/股东人数因子（按报告期 + 滞后对齐）
   - `walkforward.py`：逐年 / 滚动验证；`refresh_cs.py`：增量刷新行情缓存
-  - `portfolio_db.py` / `portfolio_web.py`：SQLite 实盘记账 / 绩效 CLI（add-trade / report / holdings…）
+  - `portfolio_db.py` / `portfolio_web.py`：SQLite 实盘记账（trades/cash_flows 均带 `strategy_id`，多策略账户隔离）/ 绩效 CLI（add-trade / report / holdings…）
+- **多策略平台 + 网页统一入口**：
+  - `platform/`：contracts（StrategyResult/ParamSpec/SleeveSpec）、registry（注册+参数校验）、adapters、reporting（reports 按策略隔离 + 当天产物缓存）
+  - `runner.py`：统一 CLI；`strategy_web.py`：统一网页 JSON 入口（`--list` 出元数据）
+  - `strategies/active_leader/`（活跃龙头）、`strategies/ai_leader/`（主板AI产业链龙头，池子在 `pool.py`）
+  - `benchmarks.py` / `webjson.py`：共享等权基准 / JSON 清洗
 - 测试：`tests/`（pytest，纯逻辑离线单测）
 
 ## 关键约束

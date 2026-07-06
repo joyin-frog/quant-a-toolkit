@@ -125,3 +125,18 @@ PYTHONPATH=src .venv/bin/python -m quant_a.portfolio_web factor-health  # 因子
 ## 架构与完整命令
 
 模块边界、参数（`config.py`）、行业中性化、增量刷新等细节见 [CLAUDE.md](CLAUDE.md)。
+## 多策略统一入口
+
+项目中的正式策略通过注册表统一运行，结果按策略隔离到 `reports/<strategy_id>/`（带 `universe` 参数时再分池子子目录）：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --list          # 加 --json 输出参数/仓位分层元数据
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy active_leader --universe csi1000 --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy core_satellite --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy multi_factor --universe csi1000 --capital 200000
+PYTHONPATH=src .venv/bin/python -m quant_a.runner --strategy ai_leader --capital 200000   # 主板AI产业链龙头
+```
+
+统一结果包含净值、基准、指标、交易记录、当前持仓、诊断信息和数据限制。每个策略在注册表里声明自己的参数（本金/持仓数/股票池…）和仓位分层，CLI 与网页表单都由该声明驱动——传了策略不支持的参数会得到人话报错而不是崩溃。策略内部暂时保留各自合适的回测模型：权重型策略使用目标权重回测，"活跃龙头"使用底仓/机动仓状态型回测。
+
+`ai_leader`（主板AI产业链龙头）：按"AI算力全产业链细分龙头"图整理的 20 条子链股票池（`strategies/ai_leader/pool.py`），因账户无创业板/科创板权限只保留主板标的（AI芯片链因此整链缺席）；每条子链选 1 只买得起的动量龙头、按子链数分预算、月度调仓整手回测。⚠️ 池子人工圈定、含幸存者偏差，属信仰仓口径。
