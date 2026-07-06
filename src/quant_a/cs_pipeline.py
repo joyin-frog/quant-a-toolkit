@@ -44,27 +44,13 @@ def _load_industry_map() -> dict[str, str]:
 
 
 def _save_equity_chart(equity_curve: pd.Series, benchmark_curve: pd.Series):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.font_manager as fm
-    import matplotlib.pyplot as plt
+    from quant_a.plotting import save_equity_vs_benchmark
 
-    for font in ["Heiti TC", "Songti SC", "Arial Unicode MS", "PingFang SC", "STHeiti"]:
-        if any(font in n.name for n in fm.fontManager.ttflist):
-            matplotlib.rcParams["font.sans-serif"] = [font]
-            break
-    matplotlib.rcParams["axes.unicode_minus"] = False
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(equity_curve.index, equity_curve.values, color="#1f77b4", lw=1.8, label="核心+AI卫星")
-    ax.plot(benchmark_curve.index, benchmark_curve.values, color="black", lw=1.2, label="沪深300主板等权基准")
-    ax.axhline(1.0, color="gray", ls=":", lw=0.8)
-    ax.set_title("核心-卫星组合 vs 基准（20万本金，整手）")
-    ax.set_ylabel("净值"); ax.grid(alpha=0.3); ax.legend()
-    fig.tight_layout()
-    path = REPORTS_DIR / "cs_equity.png"
-    fig.savefig(path, dpi=150); plt.close(fig)
-    return path
+    return save_equity_vs_benchmark(
+        equity_curve, benchmark_curve, REPORTS_DIR / "cs_equity.png",
+        "核心-卫星组合 vs 基准（20万本金，整手）",
+        strategy_label="核心+AI卫星", benchmark_label="沪深300主板等权基准",
+    )
 
 
 def run_cs_pipeline(capital: float | None = None, core_holdings: int | None = None, ai_weight: float | None = None) -> dict[str, object]:
@@ -119,7 +105,7 @@ def run_cs_pipeline(capital: float | None = None, core_holdings: int | None = No
     latest = good[good >= 100].index[-1]
     ai = select_ai_leaders(latest, panel, candidate, price_row=close_m.loc[latest], budget_per_name=ai_budget)
     core = select_core(latest, panel, candidate, core_universe, kc, names, exclude=set(ai.values()), industry_map=industry_map)
-    buy_list = build_cs_buy_list(latest, core, ai, close_m.loc[latest], cap, aw, names, LOT_SIZE)
+    buy_list = build_cs_buy_list(latest, core, ai, close_m.loc[latest], cap, aw, names, LOT_SIZE, n_chains=n_themes)
     ORDERS_DIR.mkdir(parents=True, exist_ok=True)
     order_path = ORDERS_DIR / "cs_holdings.csv"
     buy_list.to_csv(order_path, index=False)

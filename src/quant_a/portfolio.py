@@ -79,16 +79,18 @@ def select_ai_leaders(
     price_row: pd.Series | None = None,
     budget_per_name: float | None = None,
     lot: int = LOT_SIZE,
+    chains: dict[str, list[str]] | None = None,
 ) -> dict[str, str]:
     """每条 AI 子链选 1 只龙头：合格、动量最强、且【买得起】的那只。返回 {子链: 代码}。
 
     20 万本金下 AI 卫星每只预算很小（15%/8条≈3750元），北方华创/韦尔这类高价龙头 1 手就要几万、
     根本买不起。所以给了 budget_per_name 时，只在"1 手 ≤ 预算"的票里挑动量最强的——
     保证回测和清单都是 20 万真能执行的（半导体会落到三安/通富这种买得起的龙头，而非买不起的北方华创）。
+    chains 不传时用默认卫星池 AI_CHAIN；ai_leader 全仓策略传自己的产业链池。
     """
     momentum = panel["mom"]
     leaders: dict[str, str] = {}
-    for theme, codes in AI_CHAIN.items():
+    for theme, codes in (chains or AI_CHAIN).items():
         eligible = [
             c for c in codes
             if c in candidate_mask.columns and bool(candidate_mask.loc[date, c]) and pd.notna(momentum.loc[date, c])
@@ -170,13 +172,18 @@ def run_core_satellite_backtest(
     industry_map: dict[str, str] | None = None,
     lot_size: int | None = None,
     cost: float | None = None,
+    chains: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
-    """固定本金 + 100 股整手的核心-卫星回测。"""
+    """固定本金 + 100 股整手的核心-卫星回测。
+
+    chains 覆盖卫星子链池；ai_weight=1.0 + core_universe=set() 时退化为纯 AI 链策略（ai_leader 复用）。
+    """
     from quant_a.factor_backtest import rebalance_dates
 
     cap = capital if capital is not None else FACTOR_CAPITAL
     kc = core_holdings or CS_CORE_HOLDINGS
     aw = ai_weight if ai_weight is not None else AI_SATELLITE_WEIGHT
+    chain_pool = chains or AI_CHAIN
     lot = lot_size or LOT_SIZE
     fee = cost if cost is not None else (COMMISSION + SLIPPAGE)
     panel = panel or compute_factor_panel(close_matrix)
@@ -191,8 +198,8 @@ def run_core_satellite_backtest(
         if current_date in rebal:
             equity = cash + float((shares * price.fillna(0.0)).sum())
             held = [s for s in shares.index if shares[s] > 0]
-            ai_budget = aw * equity / len(AI_CHAIN) if aw > 0 else 0.0
-            ai = list(select_ai_leaders(current_date, panel, candidate_mask, price_row=price, budget_per_name=ai_budget).values())
+            ai_budget = aw * equity / len(chain_pool) if aw > 0 else 0.0
+            ai = list(select_ai_leaders(current_date, panel, candidate_mask, price_row=price, budget_per_name=ai_budget, chains=chain_pool).values())
             core = select_core(
                 current_date, panel, candidate_mask, core_universe, kc, names,
                 current_holdings=held, exclude=set(ai), max_per_sector=max_per_sector,
@@ -203,8 +210,10 @@ def run_core_satellite_backtest(
                 for s in core:
                     budget[s] = (1.0 - aw) * equity / len(core)
             if ai:
+                # 按【子链数】分母：某条链没有合格龙头时其份额留现金，而不是加倍押注其余链。
+                # 与 select_ai_leaders 的"买得起"预算口径一致，也避免链大量缺失时被动集中。
                 for s in ai:
-                    budget[s] = budget.get(s, 0.0) + aw * equity / len(ai)
+                    budget[s] = budget.get(s, 0.0) + aw * equity / len(chain_pool)
             target = _budget_to_shares(budget, price, close_matrix.columns, lot)
             delta = target - shares
             cash -= float((delta * price.fillna(0.0)).sum())
@@ -235,13 +244,18 @@ def build_cs_buy_list(
     ai_weight: float,
     names: dict[str, str],
     lot: int = LOT_SIZE,
+    ai_sleeve: str = "AI卫星",
+    n_chains: int | None = None,
 ) -> pd.DataFrame:
-    """全现金建仓的核心-卫星下单清单。"""
+    """全现金建仓的核心-卫星下单清单。ai_sleeve 允许纯 AI 策略换掉分层标签。
+
+    n_chains 给定时 AI 预算按子链总数分母（与回测口径一致），缺链的份额留现金。
+    """
     rows: list[dict[str, object]] = []
     spent = 0.0
     core_budget = (1.0 - ai_weight) * capital / len(core) if core else 0.0
-    ai_budget = ai_weight * capital / len(ai) if ai else 0.0
-    plan = [("核心", s, core_budget, "") for s in core] + [("AI卫星", c, ai_budget, t) for t, c in ai.items()]
+    ai_budget = ai_weight * capital / (n_chains or len(ai)) if ai else 0.0
+    plan = [("核心", s, core_budget, "") for s in core] + [(ai_sleeve, c, ai_budget, t) for t, c in ai.items()]
     for sleeve, symbol, money, theme in plan:
         unit = float(price_row.get(symbol, np.nan))
         if not np.isfinite(unit) or unit <= 0:

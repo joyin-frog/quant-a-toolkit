@@ -14,6 +14,7 @@ from quant_a.cache import cache_exists, load_cached_bars
 from quant_a.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "portfolio.db"
+DEFAULT_STRATEGY_ID = "core_satellite"
 
 
 def _conn() -> sqlite3.Connection:
@@ -31,49 +32,62 @@ def _conn() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL, amount REAL NOT NULL, type TEXT, note TEXT)"""
     )
+    # 兼容迁移：历史库没有 strategy_id，统一归入原先唯一实盘策略 core_satellite。
+    trade_columns = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    if "strategy_id" not in trade_columns:
+        conn.execute("ALTER TABLE trades ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'core_satellite'")
+    flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(cash_flows)")}
+    if "strategy_id" not in flow_columns:
+        conn.execute("ALTER TABLE cash_flows ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'core_satellite'")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_strategy_date ON trades(strategy_id, date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_strategy_date ON cash_flows(strategy_id, date)")
     return conn
 
 
-def add_trade(date, code, name, action, shares, price, fee=0.0, sleeve="", note="") -> int:
+def add_trade(date, code, name, action, shares, price, fee=0.0, sleeve="", note="", strategy_id=DEFAULT_STRATEGY_ID) -> int:
     if action not in ("buy", "sell"):
         raise ValueError("action 必须是 buy 或 sell")
     with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO trades(date,code,name,action,shares,price,fee,sleeve,note) VALUES(?,?,?,?,?,?,?,?,?)",
-            (str(date), str(code).zfill(6), name, action, int(shares), float(price), float(fee), sleeve, note),
+            "INSERT INTO trades(date,code,name,action,shares,price,fee,sleeve,note,strategy_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (str(date), str(code).zfill(6), name, action, int(shares), float(price), float(fee), sleeve, note, strategy_id),
         )
         return int(cur.lastrowid)
 
 
-def add_cash_flow(date, amount, flow_type="deposit", note="") -> int:
+def add_cash_flow(date, amount, flow_type="deposit", note="", strategy_id=DEFAULT_STRATEGY_ID) -> int:
     with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO cash_flows(date,amount,type,note) VALUES(?,?,?,?)",
-            (str(date), float(amount), flow_type, note),
+            "INSERT INTO cash_flows(date,amount,type,note,strategy_id) VALUES(?,?,?,?,?)",
+            (str(date), float(amount), flow_type, note, strategy_id),
         )
         return int(cur.lastrowid)
 
 
-def get_trades() -> pd.DataFrame:
+def get_trades(strategy_id: str = DEFAULT_STRATEGY_ID) -> pd.DataFrame:
     with _conn() as conn:
-        df = pd.read_sql_query("SELECT * FROM trades ORDER BY date, id", conn)
+        df = pd.read_sql_query(
+            "SELECT * FROM trades WHERE strategy_id = ? ORDER BY date, id", conn, params=(strategy_id,)
+        )
     if not df.empty:
         df["code"] = df["code"].astype(str).str.zfill(6)
         df["date"] = pd.to_datetime(df["date"])
     return df
 
 
-def get_cash_flows() -> pd.DataFrame:
+def get_cash_flows(strategy_id: str = DEFAULT_STRATEGY_ID) -> pd.DataFrame:
     with _conn() as conn:
-        df = pd.read_sql_query("SELECT * FROM cash_flows ORDER BY date, id", conn)
+        df = pd.read_sql_query(
+            "SELECT * FROM cash_flows WHERE strategy_id = ? ORDER BY date, id", conn, params=(strategy_id,)
+        )
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
     return df
 
 
-def current_positions() -> pd.DataFrame:
+def current_positions(strategy_id: str = DEFAULT_STRATEGY_ID) -> pd.DataFrame:
     """当前持仓：每个代码的净股数 + 买入均价（成本）。已清仓的不返回。"""
-    trades = get_trades()
+    trades = get_trades(strategy_id)
     if trades.empty:
         return pd.DataFrame(columns=["code", "name", "shares", "avg_cost", "sleeve"])
     rows: list[dict[str, object]] = []
@@ -103,10 +117,10 @@ def _first_on_or_after(index: pd.DatetimeIndex, date: pd.Timestamp) -> pd.Timest
     return later[0] if len(later) else None
 
 
-def reconstruct() -> dict[str, object] | None:
+def reconstruct(strategy_id: str = DEFAULT_STRATEGY_ID) -> dict[str, object] | None:
     """从成交+资金流水重建实盘：每日持仓、现金、净值（元）。返回 None 表示还没成交。"""
-    trades = get_trades()
-    flows = get_cash_flows()
+    trades = get_trades(strategy_id)
+    flows = get_cash_flows(strategy_id)
     if trades.empty:
         return None
 
