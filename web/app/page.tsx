@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { useTheme } from "next-themes";
 
 import { cn } from "@/lib/utils";
+import { hasParam, useStrategies } from "@/lib/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Table,
   TableBody,
@@ -64,6 +66,8 @@ type Holding = {
 };
 
 type Result = {
+  strategy_id: string;
+  strategy_name: string;
   as_of: string;
   range: string;
   metrics: Record<string, number>;
@@ -215,8 +219,8 @@ function Results({ data }: { data: Result }) {
   const r = data.rolling12m;
 
   // Item 1: Sleeve breakdown
-  const coreHoldings = data.holdings_list.filter((h) => h.sleeve === "核心");
-  const aiHoldings = data.holdings_list.filter((h) => h.sleeve !== "核心");
+  const coreHoldings = data.holdings_list.filter((h) => h.sleeve === "核心" || h.sleeve === "long");
+  const aiHoldings = data.holdings_list.filter((h) => h.sleeve !== "核心" && h.sleeve !== "long");
   const coreCost = coreHoldings.reduce((s, h) => s + h.cost, 0);
   const aiCost = aiHoldings.reduce((s, h) => s + h.cost, 0);
 
@@ -253,7 +257,7 @@ function Results({ data }: { data: Result }) {
         <CardHeader>
           <CardTitle>净值曲线</CardTitle>
           <CardDescription>
-            vs 基准 · 滚动12月
+            {data.strategy_name} vs 对应股票池基准 · 滚动12月
             <InfoTip content="把回测期每12个月滑动一次，计算每段的年化收益，中位数反映「大多数时候」的真实感受。" />
             {" "}中位{" "}
             <span className={cn("font-medium", tone(r.median))}>{pct(r.median)}</span> · 为正{" "}
@@ -289,11 +293,11 @@ function Results({ data }: { data: Result }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>本月下单清单（截至 {data.as_of}）</CardTitle>
+          <CardTitle>策略持仓清单（截至 {data.as_of}）</CardTitle>
           <CardDescription>
             投入 {yuan(data.invested)} · 剩余现金 {yuan(data.cash_left)} ·{" "}
             {/* Item 1: Sleeve breakdown in title */}
-            共 {data.holdings_list.length} 只（核心 {coreHoldings.length} · AI卫星 {aiHoldings.length}）· 核心行业：
+            共 {data.holdings_list.length} 只（长期/核心 {coreHoldings.length} · 机动/卫星 {aiHoldings.length}）· 行业：
             {Object.entries(data.core_sectors)
               .map(([k, v]) => `${k}${v}`)
               .join(" ") || "已分散"}
@@ -316,10 +320,10 @@ function Results({ data }: { data: Result }) {
               </TableHeader>
               <TableBody>
                 {data.holdings_list.map((h) => (
-                  <TableRow key={h.code}>
+                  <TableRow key={`${h.sleeve}-${h.code}`}>
                     <TableCell>
-                      <Badge variant={h.sleeve === "核心" ? "secondary" : "default"}>
-                        {h.sleeve === "核心" ? "核心" : `AI·${h.theme}`}
+                      <Badge variant={h.sleeve === "核心" || h.sleeve === "long" ? "secondary" : "default"}>
+                        {h.sleeve === "核心" ? "核心" : h.sleeve === "long" ? "底仓" : h.sleeve === "tactical" ? "机动" : h.theme ? `卫星·${h.theme}` : h.sleeve}
                       </Badge>
                     </TableCell>
                     {/* Item 10: font-mono for stock codes */}
@@ -340,7 +344,7 @@ function Results({ data }: { data: Result }) {
         <CardFooter className="flex flex-col items-start gap-2">
           {/* Item 1: Sleeve subtotal row */}
           <p className="text-muted-foreground text-xs tabular-nums">
-            核心投入 {yuan(coreCost)} · AI卫星投入 {yuan(aiCost)} · 现金 {yuan(data.cash_left)}
+            长期/核心投入 {yuan(coreCost)} · 机动/卫星投入 {yuan(aiCost)} · 现金 {yuan(data.cash_left)}
           </p>
           <p className="text-muted-foreground text-xs">⚠️ AI卫星是主动赌注；涨跌停就跳过。</p>
         </CardFooter>
@@ -376,9 +380,14 @@ function ChartEmpty() {
 }
 
 export default function Page() {
+  // 策略清单/参数声明来自后端注册表（/api/strategies），前端零硬编码。
+  const { strategies, error: strategiesError } = useStrategies();
+  const [strategy, setStrategy] = useState("core_satellite");
+  const meta = strategies.find((s) => s.strategy_id === strategy);
   const [capital, setCapital] = useState(200000);
   const [holdings, setHoldings] = useState(17);
   const [aiWeight, setAiWeight] = useState(0.15);
+  const [universe, setUniverse] = useState("csi1000");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; fail: number; phase: string } | null>(null);
@@ -430,10 +439,21 @@ export default function Page() {
   async function run() {
     setLoading(true);
     try {
+      // 只发当前策略声明过的参数；后端注册表兜底过滤。
+      const values: Record<string, number | string> = {
+        capital,
+        holdings,
+        ai_weight: aiWeight,
+        universe,
+      };
+      const body: Record<string, number | string> = { strategy };
+      for (const p of meta?.params ?? []) {
+        if (p.name in values) body[p.name] = values[p.name];
+      }
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capital, holdings, aiWeight }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "运行失败");
@@ -451,9 +471,9 @@ export default function Page() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold">
-            核心-卫星 <span className="text-primary">月度调仓</span>
+            {meta?.name ?? "策略"} <span className="text-primary">策略实验室</span>
           </h1>
-          <p className="text-muted-foreground text-sm">沪深300核心 + AI卫星</p>
+          <p className="text-muted-foreground text-sm">{meta?.description ?? ""}</p>
         </div>
         {/* Item 7: Theme toggle + nav link in header */}
         <div className="flex items-center gap-2">
@@ -476,40 +496,97 @@ export default function Page() {
           <CardContent>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="capital">本金（元）</FieldLabel>
-                <Input
-                  id="capital"
-                  type="number"
-                  value={capital}
-                  min={50000}
-                  step={10000}
-                  onChange={(e) => setCapital(Number(e.target.value))}
-                />
+                <FieldLabel>策略账户</FieldLabel>
+                {strategiesError ? (
+                  <p className="text-destructive text-xs">{strategiesError}</p>
+                ) : null}
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={strategy}
+                  onValueChange={(value) => {
+                    if (value) {
+                      setStrategy(value);
+                      setData(null);
+                      // 切换策略时把参数重置为该策略声明的默认值
+                      const next = strategies.find((s) => s.strategy_id === value);
+                      for (const p of next?.params ?? []) {
+                        if (p.name === "capital") setCapital(Number(p.default));
+                        if (p.name === "holdings") setHoldings(Number(p.default));
+                        if (p.name === "ai_weight") setAiWeight(Number(p.default));
+                        if (p.name === "universe") setUniverse(String(p.default));
+                      }
+                    }
+                  }}
+                  className="grid grid-cols-2"
+                >
+                  {strategies.map((s) => (
+                    <ToggleGroupItem key={s.strategy_id} value={s.strategy_id} aria-label={`选择${s.name}策略`}>
+                      {s.name.length > 8 ? s.name.slice(0, 8) : s.name}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
               </Field>
-              <Field>
-                <FieldLabel>
-                  核心持仓只数：<span className="text-primary">{holdings}</span>
-                </FieldLabel>
-                <Slider
-                  min={10}
-                  max={30}
-                  step={1}
-                  value={[holdings]}
-                  onValueChange={(v) => setHoldings(v[0])}
-                />
-              </Field>
-              <Field>
-                <FieldLabel>
-                  AI 卫星比例：<span className="text-primary">{pct(aiWeight)}</span>
-                </FieldLabel>
-                <Slider
-                  min={0}
-                  max={0.3}
-                  step={0.01}
-                  value={[aiWeight]}
-                  onValueChange={(v) => setAiWeight(v[0])}
-                />
-              </Field>
+              {hasParam(meta, "capital") ? (
+                <Field>
+                  <FieldLabel htmlFor="capital">本金（元）</FieldLabel>
+                  <Input
+                    id="capital"
+                    type="number"
+                    value={capital}
+                    min={50000}
+                    step={10000}
+                    onChange={(e) => setCapital(Number(e.target.value))}
+                  />
+                </Field>
+              ) : null}
+              {hasParam(meta, "holdings") ? (
+                <Field>
+                  <FieldLabel>
+                    {meta?.params.find((p) => p.name === "holdings")?.label ?? "持仓只数"}：
+                    <span className="text-primary">{holdings}</span>
+                  </FieldLabel>
+                  <Slider
+                    min={meta?.params.find((p) => p.name === "holdings")?.minimum ?? 10}
+                    max={meta?.params.find((p) => p.name === "holdings")?.maximum ?? 30}
+                    step={1}
+                    value={[holdings]}
+                    onValueChange={(v) => setHoldings(v[0])}
+                  />
+                </Field>
+              ) : null}
+              {hasParam(meta, "ai_weight") ? (
+                <Field>
+                  <FieldLabel>
+                    AI 卫星比例：<span className="text-primary">{pct(aiWeight)}</span>
+                  </FieldLabel>
+                  <Slider
+                    min={0}
+                    max={0.3}
+                    step={0.01}
+                    value={[aiWeight]}
+                    onValueChange={(v) => setAiWeight(v[0])}
+                  />
+                </Field>
+              ) : null}
+              {hasParam(meta, "universe") ? (
+                <Field>
+                  <FieldLabel>股票池</FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    value={universe}
+                    onValueChange={(v) => v && setUniverse(v)}
+                    className="grid grid-cols-2"
+                  >
+                    {(meta?.params.find((p) => p.name === "universe")?.choices ?? ["csi1000", "mainboard"]).map((c) => (
+                      <ToggleGroupItem key={c} value={c}>
+                        {c === "csi1000" ? "中证1000" : c === "mainboard" ? "全主板" : c}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </Field>
+              ) : null}
             </FieldGroup>
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-3">
@@ -552,8 +629,10 @@ export default function Page() {
               {loading ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" />}
               {loading ? "回测中…" : "② 生成清单"}
             </Button>
-            <p className={cn("text-xs", rebal.inWindow ? "text-primary" : "text-muted-foreground")}>
-              {rebal.inWindow
+            <p className={cn("text-xs", strategy === "core_satellite" && rebal.inWindow ? "text-primary" : "text-muted-foreground")}>
+              {strategy !== "core_satellite"
+                ? "当前策略按自身信号执行，生成结果仅作研究预览"
+                : rebal.inWindow
                 ? `今天是调仓日（每月15号）`
                 : `距下次调仓 ${rebal.days} 天（${rebal.date}）· 非调仓日生成仅作预览，别下单`}
             </p>

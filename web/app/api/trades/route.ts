@@ -3,8 +3,9 @@ import { runPython } from "@/lib/python";
 
 export const runtime = "nodejs";
 
-export async function GET() {
-  const r = await runPython(["-m", "quant_a.portfolio_web", "list"], 30000);
+export async function GET(req: Request) {
+  const strategy = new URL(req.url).searchParams.get("strategy") || "core_satellite";
+  const r = await runPython(["-m", "quant_a.portfolio_web", "list", "--strategy", strategy], 30000);
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
   return NextResponse.json(r.data);
 }
@@ -18,6 +19,7 @@ export async function POST(req: Request) {
       "--date", String(body.date),
       "--amount", String(body.amount),
       "--type", String(body.type ?? "deposit"),
+      "--strategy", String(body.strategy ?? "core_satellite"),
     ];
   } else {
     args = [
@@ -30,6 +32,7 @@ export async function POST(req: Request) {
       "--price", String(body.price),
       "--fee", String(body.fee ?? 0),
       "--sleeve", String(body.sleeve ?? ""),
+      "--strategy", String(body.strategy ?? "core_satellite"),
     ];
   }
   const r = await runPython(args, 30000);

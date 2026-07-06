@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { useTheme } from "next-themes";
 
 import { cn } from "@/lib/utils";
+import { useStrategies } from "@/lib/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -279,6 +280,11 @@ function ReviewSkeleton() {
 }
 
 export default function PortfolioPage() {
+  // 策略清单与仓位分层来自后端注册表（/api/strategies），与主页共用一份元数据。
+  const { strategies } = useStrategies();
+  const [strategy, setStrategy] = useState("core_satellite");
+  const meta = strategies.find((s) => s.strategy_id === strategy);
+  const sleeves = meta?.sleeves ?? [{ value: "核心", label: "核心" }];
   const [form, setForm] = useState({ ...emptyTrade });
   const [cash, setCash] = useState({ date: today(), amount: "" });
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -298,24 +304,26 @@ export default function PortfolioPage() {
   const fhSort = useSortState<"ic_recent" | "decay">("ic_recent");
 
   const loadTrades = useCallback(async () => {
-    const res = await fetch("/api/trades");
+    const res = await fetch(`/api/trades?strategy=${strategy}`);
     if (res.ok) setTrades(await res.json());
-  }, []);
+  }, [strategy]);
 
   const loadHoldings = useCallback(async (refresh = false) => {
     setHLoading(true);
     try {
-      const res = await fetch(`/api/holdings${refresh ? "?refresh=1" : ""}`);
+      const query = new URLSearchParams({ strategy });
+      if (refresh) query.set("refresh", "1");
+      const res = await fetch(`/api/holdings?${query.toString()}`);
       if (res.ok) setHoldings(await res.json());
       else toast.error("加载持仓失败");
     } finally {
       setHLoading(false);
     }
-  }, []);
+  }, [strategy]);
 
   useEffect(() => {
-    loadTrades();
-    loadHoldings();
+    void loadTrades();
+    void loadHoldings();
   }, [loadTrades, loadHoldings]);
 
   async function recordTrade() {
@@ -328,12 +336,12 @@ export default function PortfolioPage() {
       const res = await fetch("/api/trades", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "trade", ...form }),
+        body: JSON.stringify({ kind: "trade", strategy, ...form }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "记录失败");
       toast.success("已记录成交");
-      setForm({ ...emptyTrade, date: form.date });
+      setForm({ ...emptyTrade, date: form.date, sleeve: sleeves[0]?.value ?? "核心" });
       await loadTrades();
       loadHoldings();
     } catch (e) {
@@ -351,7 +359,7 @@ export default function PortfolioPage() {
     const res = await fetch("/api/trades", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "cash", ...cash }),
+      body: JSON.stringify({ kind: "cash", strategy, ...cash }),
     });
     if (res.ok) {
       toast.success("已记录入金");
@@ -365,7 +373,7 @@ export default function PortfolioPage() {
     setReporting(true);
     const t = toast.loading("生成绩效中…");
     try {
-      const res = await fetch("/api/portfolio");
+      const res = await fetch(`/api/portfolio?strategy=${strategy}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "失败");
       setReport(json);
@@ -381,9 +389,10 @@ export default function PortfolioPage() {
     setReviewing(true);
     const t = toast.loading("生成复盘中…（约 20-40 秒）");
     try {
-      const res = await fetch("/api/review");
+      const res = await fetch(`/api/review?strategy=${strategy}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "失败");
+      if (json.error) throw new Error(json.error);
       setReview(json);
       toast.success("复盘已生成", { id: t });
     } catch (e) {
@@ -448,14 +457,37 @@ export default function PortfolioPage() {
         <h1 className="text-2xl font-semibold">
           实盘 <span className="text-primary">记账与绩效</span>
         </h1>
-        <p className="text-muted-foreground text-sm">记真实成交 → 实盘 vs 回测/基准</p>
+        <p className="text-muted-foreground text-sm">每个策略独立管理资金、成交、持仓和绩效</p>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          value={strategy}
+          onValueChange={(value) => {
+            if (value) {
+              setStrategy(value);
+              setReport(null);
+              setReview(null);
+              setTrades([]);
+              setHoldings(null);
+              const next = strategies.find((s) => s.strategy_id === value);
+              setForm((current) => ({ ...current, sleeve: next?.sleeves[0]?.value ?? "核心" }));
+            }
+          }}
+          className="mt-3 w-fit"
+        >
+          {strategies.map((s) => (
+            <ToggleGroupItem key={s.strategy_id} value={s.strategy_id} aria-label={`切换到${s.name}账户`}>
+              {s.name.length > 8 ? s.name.slice(0, 8) : s.name}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </header>
 
       <div className="grid items-start gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
         <div className="flex flex-col gap-6 lg:sticky lg:top-6">
           <Card>
             <CardHeader>
-              <CardTitle>记一笔成交</CardTitle>
+              <CardTitle>记一笔成交 · {meta?.name ?? strategy}</CardTitle>
             </CardHeader>
             <CardContent>
               <FieldGroup>
@@ -473,6 +505,22 @@ export default function PortfolioPage() {
                     卖出
                   </ToggleGroupItem>
                 </ToggleGroup>
+                <Field>
+                  <FieldLabel>仓位分层</FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    value={form.sleeve}
+                    onValueChange={(value) => value && setForm({ ...form, sleeve: value })}
+                    className="w-full"
+                  >
+                    {sleeves.map((item) => (
+                      <ToggleGroupItem key={item.value} value={item.value} className="flex-1">
+                        {item.label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </Field>
                 <div className="grid grid-cols-2 gap-4">
                   <Field>
                     <FieldLabel htmlFor="date">日期</FieldLabel>
@@ -541,7 +589,7 @@ export default function PortfolioPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>记入金</CardTitle>
+              <CardTitle>记入金 · {meta?.name ?? strategy}</CardTitle>
             </CardHeader>
             <CardContent>
               <FieldGroup>
@@ -775,7 +823,7 @@ export default function PortfolioPage() {
                     : "对照「该买什么 vs 你真实成交」给操作打分"}
                 </CardDescription>
               </div>
-              <Button variant="outline" size="sm" onClick={loadReview} disabled={reviewing}>
+              <Button variant="outline" size="sm" onClick={loadReview} disabled={reviewing || strategy !== "core_satellite"}>
                 {reviewing ? <Spinner data-icon="inline-start" /> : <ClipboardCheckIcon data-icon="inline-start" />}
                 生成复盘
               </Button>
