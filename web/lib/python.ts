@@ -10,6 +10,7 @@ const NO_PROXY_HOSTS = ".eastmoney.com,push2his.eastmoney.com,.csindex.com.cn";
 export function runPython<T = unknown>(
   args: string[],
   timeoutMs = 180000,
+  stdin?: string,
 ): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const projectRoot = path.resolve(process.cwd(), "..");
   const python = process.env.QUANT_PYTHON || path.join(projectRoot, ".venv", "bin", "python");
@@ -26,6 +27,10 @@ export function runPython<T = unknown>(
         no_proxy: process.env.no_proxy ? `${process.env.no_proxy},${NO_PROXY_HOSTS}` : NO_PROXY_HOSTS,
       },
     });
+    if (stdin !== undefined) {
+      proc.stdin.write(stdin);
+      proc.stdin.end();
+    }
     let out = "";
     let err = "";
     const timer = setTimeout(() => {

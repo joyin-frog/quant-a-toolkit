@@ -65,6 +65,16 @@ type Holding = {
   weight: number;
 };
 
+type TransitionOrder = {
+  action: "卖出" | "保留" | "买入";
+  code: string;
+  name: string;
+  shares: number;
+  price: number | null;
+  amount: number | null;
+  note: string;
+};
+
 type Result = {
   strategy_id: string;
   strategy_name: string;
@@ -79,6 +89,20 @@ type Result = {
   cash_left: number;
   holdings_list: Holding[];
   curve: { date: string; strategy: number; benchmark: number | null }[];
+  transition?: {
+    summary: {
+      account: string;
+      as_of?: string;
+      equity: number;
+      cash_before: number;
+      cash_after: number;
+      n_sell: number;
+      n_keep: number;
+      n_buy: number;
+      locked: string[];
+    };
+    orders: TransitionOrder[];
+  } | null;
 };
 
 const pct = (x: number) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
@@ -86,19 +110,19 @@ const yuan = (x: number) => `¥${Math.round(x).toLocaleString("zh-CN")}`;
 // A股习惯：红涨绿跌。
 const tone = (x: number) => (x > 0 ? "text-gain" : x < 0 ? "text-loss" : "text-foreground");
 
-// 下次调仓日（每月 15 号附近）。生成清单不锁死，只用它提醒——非调仓日仅作预览。
-function nextRebalance() {
-  const REBAL_DAY = 15;
+// 下次调仓日（按策略 cadence 声明的每月 day 号附近）。生成清单不锁死，只用它提醒。
+function nextRebalance(day = 15) {
   const now = new Date();
   const target =
-    now.getDate() < REBAL_DAY
-      ? new Date(now.getFullYear(), now.getMonth(), REBAL_DAY)
-      : new Date(now.getFullYear(), now.getMonth() + 1, REBAL_DAY);
+    now.getDate() < day
+      ? new Date(now.getFullYear(), now.getMonth(), day)
+      : new Date(now.getFullYear(), now.getMonth() + 1, day);
   const days = Math.ceil((target.getTime() - now.getTime()) / 86400000);
   return {
+    day,
     date: target.toLocaleDateString("zh-CN"),
     days,
-    inWindow: Math.abs(days) <= 1 || now.getDate() === REBAL_DAY,
+    inWindow: Math.abs(days) <= 1 || now.getDate() === day,
   };
 }
 
@@ -214,7 +238,51 @@ function ResultsSkeleton() {
   );
 }
 
-function Results({ data }: { data: Result }) {
+type BatchTrade = {
+  date: string;
+  code: string;
+  name: string;
+  action: "buy" | "sell";
+  shares: number;
+  price: number;
+  sleeve: string;
+  note: string;
+};
+
+function Results({
+  data,
+  onRecordBatch,
+  batchSaving,
+}: {
+  data: Result;
+  onRecordBatch: (account: string, trades: BatchTrade[], label: string) => void;
+  batchSaving: boolean;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const transitionTrades = (): BatchTrade[] =>
+    (data.transition?.orders ?? [])
+      .filter((o) => o.action !== "保留" && o.price != null)
+      .map((o) => ({
+        date: today,
+        code: o.code,
+        name: o.name,
+        action: o.action === "卖出" ? ("sell" as const) : ("buy" as const),
+        shares: o.shares,
+        price: o.price as number,
+        sleeve: "自选",
+        note: "按迁移清单价记账",
+      }));
+  const paperTrades = (): BatchTrade[] =>
+    data.holdings_list.map((h) => ({
+      date: today,
+      code: h.code,
+      name: h.name,
+      action: "buy" as const,
+      shares: h.lots * 100,
+      price: h.price,
+      sleeve: h.sleeve,
+      note: "纸面跟踪·按清单价",
+    }));
   const m = data.metrics;
   const r = data.rolling12m;
 
@@ -291,6 +359,74 @@ function Results({ data }: { data: Result }) {
         </CardContent>
       </Card>
 
+      {data.transition ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              迁移调仓清单 · {data.transition.summary.account === "manual" ? "手动实盘" : data.transition.summary.account}
+              {data.transition.summary.as_of ? `（基准日 ${data.transition.summary.as_of}）` : ""}
+            </CardTitle>
+            <CardDescription>
+              从现有持仓到目标组合：卖 {data.transition.summary.n_sell} · 留 {data.transition.summary.n_keep} · 买{" "}
+              {data.transition.summary.n_buy}
+              {data.transition.summary.locked.length
+                ? ` · 锁仓 ${data.transition.summary.locked.join("、")}`
+                : ""}{" "}
+              · 迁移后现金约 {yuan(data.transition.summary.cash_after)}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>动作</TableHead>
+                    <TableHead>代码</TableHead>
+                    <TableHead>名称</TableHead>
+                    <TableHead className="text-right">股数</TableHead>
+                    <TableHead className="text-right">现价</TableHead>
+                    <TableHead className="text-right">金额</TableHead>
+                    <TableHead>说明</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.transition.orders.map((o) => (
+                    <TableRow key={`${o.action}-${o.code}`}>
+                      <TableCell>
+                        <Badge
+                          variant={o.action === "卖出" ? "destructive" : o.action === "买入" ? "default" : "secondary"}
+                        >
+                          {o.action}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono">{o.code}</TableCell>
+                      <TableCell>{o.name}</TableCell>
+                      <TableCell className="text-right tabular-nums">{o.shares}</TableCell>
+                      <TableCell className="text-right tabular-nums">{o.price ?? "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums">{o.amount != null ? yuan(o.amount) : "—"}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs">{o.note}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <p className="text-muted-foreground mt-3 text-xs">
+              ⚠️ 过渡建议：分批执行、卖出挑反弹日，别在恐慌盘一次性清；你实际怎么做记进账户，绩效报告会如实反映差异。
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              disabled={batchSaving}
+              onClick={() => onRecordBatch(data.transition!.summary.account, transitionTrades(), "迁移清单")}
+            >
+              {batchSaving ? <Spinner data-icon="inline-start" /> : null}
+              一键按清单记入该账户（按清单价；实盘请事后核对成交价）
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>策略持仓清单（截至 {data.as_of}）</CardTitle>
@@ -347,6 +483,17 @@ function Results({ data }: { data: Result }) {
             长期/核心投入 {yuan(coreCost)} · 机动/卫星投入 {yuan(aiCost)} · 现金 {yuan(data.cash_left)}
           </p>
           <p className="text-muted-foreground text-xs">⚠️ AI卫星是主动赌注；涨跌停就跳过。</p>
+          {data.strategy_id === "ai_leader" && !data.transition ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={batchSaving}
+              onClick={() => onRecordBatch("ai_paper", paperTrades(), "纸面清单")}
+            >
+              {batchSaving ? <Spinner data-icon="inline-start" /> : null}
+              一键记为纸面成交 → AI纸面跟踪账户
+            </Button>
+          ) : null}
         </CardFooter>
       </Card>
     </div>
@@ -381,18 +528,24 @@ function ChartEmpty() {
 
 export default function Page() {
   // 策略清单/参数声明来自后端注册表（/api/strategies），前端零硬编码。
-  const { strategies, error: strategiesError } = useStrategies();
+  // 主页只列可回测策略；纯记账账户（手动实盘/纸面跟踪）在 /portfolio 页。
+  const { strategies: allStrategies, error: strategiesError } = useStrategies();
+  const strategies = allStrategies.filter((s) => s.runnable !== false);
   const [strategy, setStrategy] = useState("core_satellite");
   const meta = strategies.find((s) => s.strategy_id === strategy);
   const [capital, setCapital] = useState(200000);
   const [holdings, setHoldings] = useState(17);
   const [aiWeight, setAiWeight] = useState(0.15);
   const [universe, setUniverse] = useState("csi1000");
+  const [account, setAccount] = useState("none"); // "none"=不迁移；其余为记账账户 id
+  const [locked, setLocked] = useState("");
   const [loading, setLoading] = useState(false);
+  const [batchSaving, setBatchSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; fail: number; phase: string } | null>(null);
   const [data, setData] = useState<Result | null>(null);
-  const rebal = nextRebalance();
+  const cadence = meta?.cadence;
+  const rebal = nextRebalance(cadence?.kind === "monthly" ? (cadence.day ?? 15) : 15);
 
   async function refresh() {
     setRefreshing(true);
@@ -436,6 +589,32 @@ export default function Page() {
     }
   }
 
+  async function recordBatch(accountId: string, trades: BatchTrade[], label: string) {
+    if (!trades.length) {
+      toast.error("清单里没有可记账的交易");
+      return;
+    }
+    const accountName = allStrategies.find((s) => s.strategy_id === accountId)?.name ?? accountId;
+    if (!window.confirm(`把 ${label} 的 ${trades.length} 笔交易按清单价记入「${accountName}」？\n实盘账户请事后按真实成交价核对（可在记账页删除重录）。`)) {
+      return;
+    }
+    setBatchSaving(true);
+    try {
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "batch", strategy: accountId, trades }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error ?? "批量记账失败");
+      toast.success(`已记入「${accountName}」：${json.trades} 笔成交，去记账页查看`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBatchSaving(false);
+    }
+  }
+
   async function run() {
     setLoading(true);
     try {
@@ -445,6 +624,8 @@ export default function Page() {
         holdings,
         ai_weight: aiWeight,
         universe,
+        account: account === "none" ? "" : account,
+        locked: locked.trim(),
       };
       const body: Record<string, number | string> = { strategy };
       for (const p of meta?.params ?? []) {
@@ -510,6 +691,8 @@ export default function Page() {
                       setData(null);
                       // 切换策略时把参数重置为该策略声明的默认值
                       const next = strategies.find((s) => s.strategy_id === value);
+                      setAccount("none");
+                      setLocked("");
                       for (const p of next?.params ?? []) {
                         if (p.name === "capital") setCapital(Number(p.default));
                         if (p.name === "holdings") setHoldings(Number(p.default));
@@ -587,6 +770,36 @@ export default function Page() {
                   </ToggleGroup>
                 </Field>
               ) : null}
+              {hasParam(meta, "account") ? (
+                <Field>
+                  <FieldLabel>从账户迁移</FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    value={account}
+                    onValueChange={(v) => v && setAccount(v)}
+                    className="grid grid-cols-3"
+                  >
+                    <ToggleGroupItem value="none">不迁移</ToggleGroupItem>
+                    <ToggleGroupItem value="manual">手动实盘</ToggleGroupItem>
+                    <ToggleGroupItem value="ai_paper">AI纸面</ToggleGroupItem>
+                  </ToggleGroup>
+                  <p className="text-muted-foreground text-xs">
+                    选账户后，清单会从该账户的现有持仓出发给出 卖出/保留/买入 过渡方案
+                  </p>
+                </Field>
+              ) : null}
+              {hasParam(meta, "locked") && account !== "none" ? (
+                <Field>
+                  <FieldLabel htmlFor="locked">锁仓代码（策略不卖）</FieldLabel>
+                  <Input
+                    id="locked"
+                    placeholder="如 600760,600176（逗号分隔）"
+                    value={locked}
+                    onChange={(e) => setLocked(e.target.value)}
+                  />
+                </Field>
+              ) : null}
             </FieldGroup>
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-3">
@@ -629,11 +842,11 @@ export default function Page() {
               {loading ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" />}
               {loading ? "回测中…" : "② 生成清单"}
             </Button>
-            <p className={cn("text-xs", strategy === "core_satellite" && rebal.inWindow ? "text-primary" : "text-muted-foreground")}>
-              {strategy !== "core_satellite"
-                ? "当前策略按自身信号执行，生成结果仅作研究预览"
+            <p className={cn("text-xs", cadence?.kind === "monthly" && rebal.inWindow ? "text-primary" : "text-muted-foreground")}>
+              {cadence?.kind === "daily_signal"
+                ? "该策略按自身信号每日执行，生成结果仅作研究预览"
                 : rebal.inWindow
-                ? `今天是调仓日（每月15号）`
+                ? `今天是调仓日（每月${rebal.day}号附近）`
                 : `距下次调仓 ${rebal.days} 天（${rebal.date}）· 非调仓日生成仅作预览，别下单`}
             </p>
           </CardFooter>
@@ -644,7 +857,7 @@ export default function Page() {
           {loading ? (
             <ResultsSkeleton />
           ) : data ? (
-            <Results data={data} />
+            <Results data={data} onRecordBatch={recordBatch} batchSaving={batchSaving} />
           ) : (
             // Item 8: proper empty state + Item 4: chart empty state within
             <div className="flex flex-col gap-6">

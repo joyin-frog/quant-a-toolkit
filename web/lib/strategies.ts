@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 export type ParamSpec = {
   name: string;
-  kind: "number" | "integer" | "choice";
+  kind: "number" | "integer" | "choice" | "text";
   default: number | string;
   label: string;
   choices?: string[];
@@ -15,12 +15,18 @@ export type ParamSpec = {
 
 export type SleeveSpec = { value: string; label: string };
 
+// 调仓节奏：monthly=每月 day 号附近、daily_signal=按信号每日执行、none=纯记账无节奏
+export type Cadence = { kind: "monthly" | "daily_signal" | "none"; day?: number };
+
 export type StrategyMeta = {
   strategy_id: string;
   name: string;
   description: string;
   params: ParamSpec[];
   sleeves: SleeveSpec[];
+  // false = 纯记账账户（手动实盘/纸面跟踪）：记账页可选，主页"生成清单"不显示
+  runnable?: boolean;
+  cadence?: Cadence;
 };
 
 export function useStrategies() {

@@ -13,8 +13,9 @@ export async function POST(req: Request) {
   const flags: [string, unknown][] = [
     ["--capital", body.capital],
     ["--holdings", body.holdings],
-    ["--ai_weight", body.ai_weight ?? body.aiWeight],
     ["--universe", body.universe],
+    ["--account", body.account],
+    ["--locked", body.locked],
   ];
   for (const [flag, value] of flags) {
     if (value !== undefined && value !== null && value !== "") args.push(flag, String(value));
